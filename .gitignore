@@ -28,3 +28,8 @@ libs/*.lib
 .jsondata/
 temp/
 logs/*.txt
+
+# PyInstaller output from build.py (regenerated on demand)
+dist/
+build/
+.build_entry/
