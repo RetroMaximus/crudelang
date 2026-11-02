@@ -111,7 +111,7 @@ def ui_failure(stage):
 #  disappear from a script.
 _EXPECTED_BINDINGS = (
     "WIDGET",
-    "PANEL", "TEXT", "BUTTON", "TOGGLE", "SLIDER", "VSLIDER",
+    "PANEL", "TEXT", "BUTTON", "TOGGLE", "SLIDER", "VSLIDER", "KNOB",
     "NUMBER", "METER", "RADIO", "DROPDOWN",
     "WAVEFORM", "SPECTRUM", "ADSR", "CURVE", "XY_PAD", "KEYBED",
     "PRESET_BAR",
@@ -150,6 +150,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("TOGGLE", ("label", "on"), 1),
     ("SLIDER", ("label", "min", "max", "value"), 4),
     ("VSLIDER", ("label", "min", "max", "value"), 4),
+    ("KNOB", ("label", "min", "max", "value"), 4),
     ("NUMBER", ("label", "min", "max", "value"), 4),
     ("METER", ("label", "min", "max", "value"), 4),
     ("RADIO", ("labels", "value"), 2),
@@ -237,6 +238,9 @@ _DIRECT_CONSTRUCTORS = [
     ]),
     ("VSLIDER", "vslider", [
         ("label", '"pan"'), ("min", "-1"), ("max", "1"), ("value", "0"),
+    ]),
+    ("KNOB", "knob", [
+        ("label", '"Index"'), ("min", "0"), ("max", "12"), ("value", "7"),
     ]),
     ("NUMBER", "number", [
         ("label", '"bpm"'), ("min", "20"), ("max", "300"), ("value", "120"),
@@ -351,7 +355,8 @@ def test_every_catalog_kind_has_its_own_constructor(run):
     """
     first_arg = {
         "PANEL": '"x"', "TEXT": '"x"', "BUTTON": '"x"', "TOGGLE": '"x"',
-        "SLIDER": '"x"', "VSLIDER": '"x"', "NUMBER": '"x"', "METER": '"x"',
+        "SLIDER": '"x"', "VSLIDER": '"x"', "KNOB": '"x"',
+        "NUMBER": '"x"', "METER": '"x"',
         "ICON": '"play"', "RADIO": '["a", "b"]', "DROPDOWN": '["a", "b"]',
         "WAVEFORM": '"x"', "SPECTRUM": '"x"', "ADSR": '"x"', "CURVE": '"x"',
         "XY_PAD": '"x"', "KEYBED": '"x"', "PRESET_BAR": '["a", "b"]',

@@ -334,7 +334,7 @@ class Toggle(Widget):
             r.text(bx + track_w + 12, by + self.h * 0.5 - 8,
                    self.label, 14, (0.85, 0.90, 1.0, 1.0))
 
-
+# button is a puredata bng
 class Button(Widget):
     def __init__(self, x, y, w, h, label, on_press):
         super().__init__(x, y, w, h)

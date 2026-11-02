@@ -206,7 +206,14 @@ class Runtime:
                 if painting:
                     self._fallback_renderer()
                 renderer = self._null_renderer()
-            return window_context(self._display, renderer)
+            # ``Display`` is a wrapper over the GLFW ``Window``; the client rect,
+            # the swap that presents a frame and the input listener all live on
+            # that window, not on the wrapper. Handing window_context the
+            # wrapper left ``swap`` unresolved, so a frame was drawn and never
+            # shown - and the pointer never reached the tree. Unwrap it, and
+            # fall back to the object itself for a fake that already is a window.
+            window = getattr(self._display, "window", self._display)
+            return window_context(window, renderer)
 
         renderer = self._gl_renderer_or_null() if painting else \
             self._null_renderer()

@@ -31,10 +31,10 @@ from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       prop_names, props_of, registered_names, reset, settle,
                       settled, states, UIError, value_of)
 
-#: the eighteen kinds the plan's widget list adds up to: the eleven faces and
+#: the nineteen kinds the plan's widget list adds up to: the twelve faces and
 #  controls, plus the seven synth widgets S9 put on the same conventions
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
-           "number", "meter", "radio", "dropdown",
+           "knob", "number", "meter", "radio", "dropdown",
            "waveform", "spectrum", "adsr", "curve", "xy", "keybed",
            "preset_bar")
 

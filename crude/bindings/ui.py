@@ -103,6 +103,7 @@ CONSTRUCTORS: dict = {
     for name, kind in (
         ("PANEL", "panel"), ("TEXT", "text"), ("BUTTON", "button"),
         ("TOGGLE", "toggle"), ("SLIDER", "slider"), ("VSLIDER", "vslider"),
+        ("KNOB", "knob"),
         ("NUMBER", "number"), ("METER", "meter"), ("RADIO", "radio"),
         ("DROPDOWN", "dropdown"),
         # the synth words, sugar over WIDGET like the ten above them: their

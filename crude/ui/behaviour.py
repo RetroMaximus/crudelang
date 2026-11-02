@@ -873,6 +873,11 @@ def _keyboard() -> Dict[str, Callable[..., Any]]:
 BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     "slider": _range("x", 1.0),
     "vslider": _range("y", -1.0),
+    # a knob drags like a vslider and measures like one, but never jumps: the
+    # pointer of a dial has no position on it to teleport to, so the press that
+    # lands must leave the value exactly where it was - jump=False, the same
+    # answer a number box gives for a different reason
+    "knob": _range("y", -1.0, jump=False),
     "number": _range("x", 1.0, jump=False),
     "toggle": _latch(),
     "button": _momentary(),

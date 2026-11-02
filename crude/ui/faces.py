@@ -1,10 +1,12 @@
 """The faces the catalog cannot draw with a plate and a label alone.
 
 :func:`~crude.ui.widget.base_face` answers "a box, a border, a word" for every
-kind, and that answer is correct for everything except the synth widgets: a
-waveform is not a value box with a caption, and neither is a keyboard. This
-module is where those five pictures - and the two graphs beside them - live:
-one function per kind, named by kind, in one table.
+kind, and that answer is correct for everything except the widgets that are a
+picture: a waveform is not a value box with a caption, neither is a keyboard,
+and neither is a slider whose thumb is the value. This module is where those
+pictures live - the synth widgets, the ranges with a thumb, the meter, the
+radio's cells and the dial - one function per kind, named by kind, in one
+table.
 
 The split is deliberate. ``widget.py`` owns boxes, states and the skin; a face
 owns *only* what happens inside the plate the skin already drew, and takes the
@@ -25,9 +27,10 @@ can assert against without a running engine.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .geometry import Point, clamp
+from .geometry import TAU, Point, TEXT_HEIGHT, clamp
 from .skin import Skin
 
 __all__ = ["FACES", "Face", "face_for"]
@@ -269,9 +272,242 @@ def _draw_keybed(widget: Any, renderer: Any, skin: Skin,
     return renderer.op_count - before
 
 
+#: the dial's sweep and where it starts. Angles are the renderer's own - 0 to
+#  the right, y down, so a positive sine is *down* - which puts the lower left
+#  at 3π/4 (cos<0, sin>0) and the lower right at π/4. Starting there and sweeping
+#  three quarters of a turn runs 3π/4 → π (left) → π/2 up through the top → 0
+#  (right) → π/4: minimum at the left hand, maximum at the right, and the one
+#  quarter turn of gap under the dial where nothing ever points. The sweep is
+#  kept under a full turn on purpose - the renderer closes any arc whose sweep
+#  reaches TAU into a ring, and a ring has no gap to read the value off.
+_KNOB_START = 0.375 * TAU
+_KNOB_SWEEP = 0.75 * TAU
+
+
+def _is_vertical(widget: Any) -> bool:
+    """Whether this range is drawn top-down, which its kind name answers.
+
+    ``vslider`` is the only catalog kind that is, and the face lookup walks the
+    chain into ``slider`` for anything defined over it - so the name, not a
+    second prop, stays the one fact about orientation.
+    """
+    return "vslider" in widget.kind.chain()
+
+
+def _draw_slider(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The range with a thumb: track, fill up to the value, thumb on the value.
+
+    One painter serves the horizontal and the vertical box, because the
+    behaviour module already established that a ``vslider`` is ``slider`` read
+    one way round - here that reading is the longer edge taken as the ruler.
+    The thumb is a slab across the track (Pd puts its bar *at* the value, not
+    around it), and the accent runs from the zero end of the track to the
+    thumb, so the picture is the number: 0 shows no accent, the maximum shows
+    none of the trough.
+
+    The label is Pd's own way round - written across the trough itself, so a
+    24-pixel slider still says its name - and a vertical box, where the word
+    has a free end to sit on, keeps it above the track instead.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    from .behaviour import fraction_of
+    vertical = _is_vertical(widget)
+    text = widget.label or found.glyph
+    band = found.font * TEXT_HEIGHT if (text and vertical) else 0.0
+    thick = min(width if vertical else height, 24.0)
+    ruler = max(0.0, (height if vertical else width) - band)
+    side = max(3.0, min(thick * 0.6, ruler * 0.16))
+    travel = max(0.0, ruler - side)
+    point = clamp(fraction_of(widget, widget.value), 0.0, 1.0)
+    along = travel * point
+    fill = skin.resolve("fill").fill
+    thumb = skin.resolve("thumb").fill
+    if vertical:
+        x, y = left + (width - thick) * 0.5, top + band
+        renderer.rect(x, y, thick, ruler, found.border, radius=thick * 0.5)
+        # the zero end is the floor: the accent grows upward from it and the
+        # thumb's near edge rides the same distance up from the bottom
+        renderer.rect(x, y + ruler - along, thick, along, fill)
+        renderer.rect(x, y + ruler - along - side, thick, side, thumb)
+    else:
+        x, y = left, top + (height - thick) * 0.5
+        renderer.rect(x, y, ruler, thick, found.border, radius=thick * 0.5)
+        # the zero end is the left: the accent runs from it to the thumb and
+        # the thumb's near edge is the value, so low reads left and high right
+        renderer.rect(x, y, along, thick, fill)
+        renderer.rect(x + along, y, side, thick, thumb)
+    if text:
+        if vertical:
+            renderer.text(left + width * 0.5, top, text, found.font,
+                          found.ink, align="center")
+        else:
+            renderer.text(left + ruler * 0.5, y + (thick - found.font) * 0.5,
+                          text, found.font, found.ink, align="center")
+    return renderer.op_count - before
+
+
+def _draw_meter(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The level read out: the trough lit from its zero end to the value.
+
+    Orientation comes from the box rather than the kind, because a ``[vu]`` is
+    drawn as often on a mixer's channel strip as across one, and the long edge
+    is where a level has room to be seen. There is no thumb: a meter is read,
+    not grabbed, and the behaviour table already refuses it the drag. The word
+    goes on over the level through the tree's own ``paint_label``, measured and
+    centred, because a 24-pixel ``[vu]`` whose name runs past its box is drawn
+    with the same care a button's caption is.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    from .behaviour import fraction_of
+    point = clamp(fraction_of(widget, widget.value), 0.0, 1.0)
+    level = skin.resolve("fill").fill
+    if width >= height:
+        renderer.rect(left, top, width * point, height, level)
+    else:
+        renderer.rect(left, top + height * (1.0 - point), width,
+                      height * point, level)
+    if widget.label:
+        widget.paint_label(renderer, found)
+    return renderer.op_count - before
+
+
+def _draw_radio(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The choices laid out at once: one cell per label, the held one lit.
+
+    The grid is :func:`~crude.ui.behaviour._cell_at`'s arithmetic - ``columns``
+    across, as many rows as the labels need, the last row's spare cells simply
+    absent - so the cell a person presses is provably the cell that was drawn.
+
+    The face owns its whole interior, including the plate: a radio holding a
+    non-first index resolves to the ``on`` state, and the checkbox (and the
+    preset bar's selection) role paints that state in the accent - which would
+    swallow the unlit cells the moment anything was chosen. So a neutral plate
+    is laid down first, in colours read from stable roles rather than from
+    ``found``, and only then the cells: the held index in the accent, the rest
+    raised. A cell with a word gets the word. ``preset_bar`` inherits all of
+    this unchanged, because it is a radio's cells wearing a different role.
+    """
+    before = renderer.op_count
+    sl, st, sw, sh = widget.screen_box
+    left, top, width, height = widget.content_box()
+    words = list(widget.get("labels") or ())
+    if sw <= 0.0 or sh <= 0.0 or width <= 0.0 or height <= 0.0 or not words:
+        return 0
+    # colours the widget's own on-state cannot move: read from stable roles
+    frame = skin.resolve("border").fill
+    plate = skin.resolve("track").fill
+    cell_off = skin.resolve("button").fill
+    accent = skin.resolve("fill").fill
+    lit_ink = skin.resolve("fill").ink
+    edge = min(found.width, sw * 0.5, sh * 0.5)
+    if edge > 0:
+        renderer.rect(sl, st, sw, sh, frame, radius=found.radius)
+        renderer.rect(sl + edge, st + edge, max(0.0, sw - 2 * edge),
+                      max(0.0, sh - 2 * edge), plate,
+                      radius=found.radius - edge if found.radius else 0.0)
+    else:
+        renderer.rect(sl, st, sw, sh, plate, radius=found.radius)
+    from .behaviour import _columns
+    across = _columns(widget)
+    if not widget.get("columns"):
+        # columns 0 is Pd's "one row per entry", which the hit test already
+        # reads as one column; the face says the same thing as many columns
+        # as there are words, because a bar of cells is what was promised
+        across = len(words)
+    rows = max(1, -(-len(words) // across))
+    held = int(round(float(widget.value))) if widget.has_value else -1
+    cw, ch = width / across, height / rows
+    gap = min(cw, ch) * 0.1
+    for index, word in enumerate(words):
+        row, col = divmod(index, across)
+        x, y = left + col * cw + gap, top + row * ch + gap
+        w, h = max(0.0, cw - 2 * gap), max(0.0, ch - 2 * gap)
+        lit = index == held
+        renderer.rect(x, y, w, h, accent if lit else cell_off,
+                      radius=found.radius)
+        said = str(word) if word else str(index)
+        renderer.text(x + w * 0.5, y + max(0.0, (h - found.font) * 0.5),
+                      said, found.font, lit_ink if lit else found.ink,
+                      align="center")
+    return renderer.op_count - before
+
+
+def _draw_knob(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The dial: a 270 degree ring of ticks, the turned part lit, a pointer.
+
+    The face is the answer vanilla Pd never had to give - a dial is not a box
+    in 0.54 - so the geometry comes from the widget's own numbers: the value's
+    fraction of the range sets the pointer inside the sweep above, ticks are
+    drawn at the ``ticks`` prop or ten when it says 0, and the value arc runs
+    counter-clockwise from the lower left exactly as far as the value is.
+    Dragging stays vertical like a ``vslider``, because a dial's pointer has
+    no position for the mouse to jump to.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    from .behaviour import fraction_of
+    cx = left + width * 0.5
+    label_size = found.font * 0.75
+    label_h = label_size * TEXT_HEIGHT if widget.label else 0.0
+    value_size = found.font * 0.75
+    value_h = value_size * TEXT_HEIGHT if widget.has_value else 0.0
+    pad = max(found.width, 1.0)
+    dial_top = top + label_h
+    dial_height = max(0.0, height - label_h - value_h)
+    radius = min(width, dial_height) * 0.5 - pad
+    if radius <= 0.0:
+        return renderer.op_count - before
+    cy = dial_top + dial_height * 0.5
+    point = clamp(fraction_of(widget, widget.value), 0.0, 1.0)
+    count = int(widget.get("ticks") or 0) or 10
+    angle_at = lambda at: _KNOB_START + _KNOB_SWEEP * clamp(at, 0.0, 1.0)
+    for step in range(count + 1):
+        at = step / count
+        outer = radius + pad
+        cosine, sine = math.cos(angle_at(at)), math.sin(angle_at(at))
+        renderer.line((cx + (outer - pad * 2) * cosine,
+                       cy + (outer - pad * 2) * sine),
+                      (cx + outer * cosine, cy + outer * sine),
+                      thickness=pad, color=found.border)
+    ring = radius - min(radius * 0.18, 5.0)
+    renderer.arc(cx, cy, ring, thickness=pad * 1.5,
+                 start=_KNOB_START, end=_KNOB_START + _KNOB_SWEEP,
+                 color=found.border)
+    if point > 0.0:
+        renderer.arc(cx, cy, ring, thickness=pad * 1.5, start=_KNOB_START,
+                     end=angle_at(point), color=skin.resolve("fill").fill)
+    face = radius - pad * 4
+    renderer.circle(cx, cy, face, found.fill)
+    inner = face - max(face * 0.55, 4.0)
+    pointer = angle_at(point)
+    renderer.line((cx + inner * math.cos(pointer),
+                   cy + inner * math.sin(pointer)),
+                  (cx + face * math.cos(pointer), cy + face * math.sin(pointer)),
+                  thickness=pad * 2, color=found.ink)
+    middle = left + width * 0.5
+    if widget.label:
+        renderer.text(middle, top, widget.label, label_size, found.ink,
+                      align="center")
+    if widget.has_value:
+        renderer.text(middle, top + height - value_size, widget.readout(),
+                      value_size, found.ink, align="center")
+    return renderer.op_count - before
+
+
 #: kind name -> the function that draws its inside. A kind that is not here -
 #  and every kind with a plate and a word is - is ``base_face``'s business
 #  alone, so this table is the only per-kind branch the paint path grows.
+#  ``vslider`` and ``preset_bar`` are deliberately not keys: the first is
+#  slider read one way round and the second is a radio wearing the selection
+#  role, and the chain lookup below is what says so.
 FACES: Dict[str, Face] = {
     "waveform": _plot_waveform,
     "spectrum": _plot_spectrum,
@@ -279,6 +515,10 @@ FACES: Dict[str, Face] = {
     "curve": _draw_curve,
     "xy": _draw_pad,
     "keybed": _draw_keybed,
+    "slider": _draw_slider,
+    "meter": _draw_meter,
+    "radio": _draw_radio,
+    "knob": _draw_knob,
 }
 
 
@@ -289,11 +529,10 @@ def face_for(kind: Any) -> Optional[Face]:
     its parent's picture the same way it inherits its props: a script's
     ``WIDGET_DEFINE("scope", "waveform")`` has no reason to be a bare plate,
     and a synth kind defined over ``adsr`` that wants its own face says so with
-    an ``ON_PAINT``, which the tree already puts ahead of everything here.
-
-    ``preset_bar`` is deliberately absent: a row of accent-lit cells *is* a
-    radio's plate with the selection role's fill, which the skin already draws
-    - the bar changes what a radio looks like, never how it is painted.
+    an ``ON_PAINT``, which the tree already puts ahead of everything here. A
+    ``vslider`` reaches ``slider`` and is drawn top-down by the face's own
+    reading of the kind, and a ``preset_bar`` reaches ``radio`` - the bar *is*
+    a radio's cells, and its selection role is what makes them accent-lit.
     """
     from .props import get_kind
     for name in get_kind(kind).chain():

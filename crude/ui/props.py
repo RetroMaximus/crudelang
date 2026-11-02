@@ -1178,6 +1178,13 @@ _kind("slider", "hslider",
       role={"default": "track"})
 _kind("vslider", "vslider", base="slider",
       hint="A slider drawn top-down; every prop is slider's own.")
+# vanilla Pd has no dial: a knob is an [hslider] the skin draws round, so the
+# twin, the args and the range rows all come from slider, and only the face,
+# the gesture and the "no typing into a dial" default are this kind's own
+_kind("knob", base="slider",
+      hint="A rotary range; drag up or scroll to raise it, arrows either way.",
+      role={"default": "knob"}, editable={"default": False},
+      glyph={"default": ""})
 _kind("number", "nbx", hint="A value that is typed as well as dragged.",
       args=("label", "min", "max", "value"),
       rows=("value", "min", "max", "step", "log", "editable"),
@@ -1194,6 +1201,7 @@ _kind("radio", "radio", hint="A set of choices laid out at once.",
 _kind("dropdown", "dropdown", hint="One choice, folded until it is opened.",
       args=("labels", "value"), rows=("value", "labels"),
       role={"default": "field"},
+      glyph={"default": "chevron-d"},
       value={"minimum": 0.0, "maximum": None, "bounds": ("", "labels")})
 
 # the synth widgets. None of them twins to a Pd box - a waveform, an envelope or

@@ -87,8 +87,9 @@ PD_SEND(p, "gate", 1)
 PD_DSP(1)
 LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")
 
-# What is still to come, and what replaces the two lines above when it does:
-#
-#   VAR knob = KNOB("Index", 0, 12, 7)      # the widget stage answers the same
-#   PLACE(knob, 24, 24, 96, 96)             # receivers PD_SEND names here, so
-#   ON_CHANGE(knob, FUNC(v) -> PD_SEND(p, "index", v))   # the patch never changes
+# A widget wired back into the patch. A knob is not a box vanilla Pd ships, so
+# its twin is an [hslider] - PD_EMIT writes the range the patch already reads,
+# and dragging the dial sends "index" straight in, the way a hardware knob does.
+VAR knob  = KNOB("Index", 0, 12, 7)
+PLACE(knob, 24, 224, 70, 70)
+ON_CHANGE(knob, FUNC(v) -> PD_SEND(p, "index", v))

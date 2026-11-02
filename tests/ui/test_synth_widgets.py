@@ -25,6 +25,7 @@ Two things make these tests S9 and not a repeat of S8:
 
 from __future__ import annotations
 
+import math
 import types
 from pathlib import Path
 from typing import Any, List
@@ -40,12 +41,16 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
                       Widget, behaviour_for, define, face_for, get_kind,
                       pd_arguments, pd_object_for, reset, root_panel)
 
-#: the kinds that own a face: every one of them draws a picture inside the plate
-DISPLAY = ("waveform", "spectrum", "adsr", "curve", "xy", "keybed")
+#: the kinds that own a face: every one of them draws a picture inside the plate,
+#  from the six synth displays to the ranges, the meter, the radio's cells and
+#  the dial - while ``vslider`` and ``preset_bar`` are proved below to reach a
+#  face through the chain instead of by owning one
+DISPLAY = ("waveform", "spectrum", "adsr", "curve", "xy", "keybed",
+           "slider", "meter", "radio", "knob")
 
-#: the kinds that hold a value or coordinate a gesture and so have no face -
-#  a preset bar is a radio, and a scope shows what a script pushed into ``data``
-NO_FACE = ("preset_bar", "panel", "text", "slider", "toggle")
+#: the kinds a bare plate and a word still describe: nothing here draws inside
+#  the plate, because a toggle is the plate and a panel is where the others sit
+NO_FACE = ("panel", "text", "icon", "button", "toggle", "dropdown")
 
 
 @pytest.fixture(autouse=True)
@@ -126,18 +131,22 @@ def test_a_variant_wears_its_parents_face_the_way_it_inherits_its_props():
     assert face_for("scope") is FACES["waveform"]
     define("shaper", "curve")
     assert face_for("shaper") is FACES["curve"]
+    # the catalog's own two chain wearers: a vslider is a slider read top-down,
+    # and a preset bar is a radio wearing the selection role's accent
+    assert face_for("vslider") is FACES["slider"]
+    assert face_for("preset_bar") is FACES["radio"]
 
 
-@pytest.mark.parametrize("kind", DISPLAY)
+@pytest.mark.parametrize("kind", DISPLAY[:6])
 def test_a_synth_display_kind_twins_to_no_pd_box_and_owns_no_emit_row(kind):
-    """The five faces twin to no Pd box: ``pd_object`` is empty.
+    """The six synth faces twin to no Pd box: ``pd_object`` is empty.
 
     ``PD_EMIT`` maps a widget to a real Pd control through ``pd_object``, and a
-    scope, an analyser, an envelope, a curve and a pad have no vanilla equivalent
-    - so they declare ``pd_object ""`` and no synth row carries a ``pd_name``.
-    The data path is the script's own: an ``ON_CHANGE`` into a ``PD_SEND``, or
-    ``PD_MIDI_NOTEON`` for the keybed. (The ``preset_bar`` is a ``radio`` and
-    does inherit its box, so it is proved separately below.)
+    scope, an analyser, an envelope, a curve and a pad have no vanilla
+    equivalent - so they declare ``pd_object ""`` and no synth row carries a
+    ``pd_name``. The data path is the script's own: an ``ON_CHANGE`` into a
+    ``PD_SEND``, or ``PD_MIDI_NOTEON`` for the keybed. (The ``preset_bar`` is a
+    ``radio`` and does inherit its box, so it is proved separately below.)
     """
     held = get_kind(kind)
     assert held.pd_object == "", kind
@@ -155,6 +164,19 @@ def test_a_preset_bar_inherits_the_radio_box_it_twins_to():
     """The one synth kind that is a control: same cells, same Pd ``hradio``."""
     bar = get_kind("preset_bar")
     assert bar.pd_object == get_kind("radio").pd_object != ""
+
+
+def test_the_faced_controls_still_twin_to_the_boxes_their_kind_names():
+    """A face is a drawing, not a new Pd object: the range kinds keep their own.
+
+    The knob is the pointed case - vanilla Pd 0.54 ships no dial, so the kind
+    is a slider the skin draws round and its twin stays ``[hslider]``, the box
+    ``PD_EMIT`` already knows how to lay out.
+    """
+    for kind, box in (("slider", "hslider"), ("vslider", "vslider"),
+                      ("knob", "hslider"), ("meter", "vu"),
+                      ("radio", "radio")):
+        assert pd_object_for(get_kind(kind), {}) == box, kind
 
 
 def test_the_adsr_and_keybed_carry_a_value_but_the_pads_and_graphs_do_not():
@@ -359,18 +381,162 @@ def test_the_held_key_is_repainted_in_the_accent_before_pd_has_answered(root, sk
 
 
 def test_a_preset_bar_is_a_radio_in_its_paint_as_well_as_its_gesture(root, skin):
-    """No face of its own: it is a plate wearing the selection role's accent."""
+    """No face of its own: the radio's cells, on the selection role's plate."""
     held = placed(root, skin, "preset_bar", {"labels": ["a", "b", "c"]})
-    assert face_for(held.kind) is None
+    assert face_for(held.kind) is FACES["radio"]
     assert held.role == "selection"
     drawn = paint(held, skin)
     assert drawn.count("polyline") == 0, "a preset bar draws no graph"
     assert drawn.count("circle") == 0
-    # the accent *is* the selection role's fill, drawn by base_face's plate: the
-    # bar changes what a radio looks like, never how it is painted, so the plate
-    # rect carries that colour and nothing a face would add is anywhere in the frame
-    plate = drawn.first("rect")
-    assert plate.get("color") == skin.resolve("selection").fill
+    # the accent *is* the selection role's fill, drawn by base_face's plate under
+    # the cells: the bar changes what a radio looks like, never how it is painted
+    plate = [op for op in drawn.ops_named("rect")
+             if op.get("color") == skin.resolve("selection").fill]
+    assert plate, "the plate is still the first thing on the frame"
+    assert plate[0].get("x") == pytest.approx(held.screen_box[0])
+
+
+# -- the faced controls: a picture the numbers can be read off of ----------
+
+
+def test_a_slider_draws_its_thumb_at_its_value(root, skin):
+    """The thumb is the value: the fill runs from the zero end (the left) to
+    the thumb's near edge, and the word goes on over the track."""
+    held = placed(root, skin, "slider", {"label": "BPM", "min": 0, "max": 100,
+                                         "value": 25},
+                  box=(56, 40, 200, 24))
+    drawn = paint(held, skin)
+    left, _top, width, _height = held.content_box()
+    fill = skin.resolve("fill").fill
+    thumbc = skin.resolve("thumb").fill
+    rects = drawn.ops_named("rect")
+    bar = [op for op in rects if op.get("color") == fill]
+    thumb = [op for op in rects if op.get("color") == thumbc]
+    assert len(bar) == 1 and len(thumb) == 1
+    assert bar[0].get("x") == pytest.approx(left), "the fill starts at the left"
+    assert 0.0 < bar[0].get("width") < width
+    assert thumb[0].get("x") == pytest.approx(bar[0].get("x")
+                                              + bar[0].get("width")), \
+        "the thumb rides on the end of the fill"
+    assert drawn.last("text").get("text") == "BPM"
+
+
+def test_a_slider_thumb_runs_from_the_left_end_at_zero_to_the_right_at_full(
+        root, skin):
+    """Two paints, one number apart: the slab's near edge is the value's pixel."""
+    held = placed(root, skin, "slider", {"min": 0, "max": 100, "value": 0},
+                  box=(56, 40, 200, 24))
+    left, _top, width, _height = held.content_box()
+    thumbc = skin.resolve("thumb").fill
+
+    def thumb():
+        return [op for op in paint(held, skin).ops_named("rect")
+                if op.get("color") == thumbc][0]
+
+    low = thumb()
+    assert low.get("x") == pytest.approx(left), "zero parks the thumb at the left"
+    held.set("value", 100)
+    high = thumb()
+    assert low.get("x") < high.get("x"), "the thumb follows the value right"
+    assert high.get("x") + high.get("width") == pytest.approx(left + width)
+
+
+def test_a_vslider_is_the_same_picture_read_top_down(root, skin):
+    """The chain gives it the slider's face; the face gives it its own axis.
+
+    On a vertical box the zero end is the floor: the fill grows up from it and
+    the thumb rides on top of the fill, so the fill's bottom is the box's bottom
+    - the exact opposite of the horizontal case, proved in pixels.
+    """
+    held = placed(root, skin, "vslider", {"label": "pan", "min": -1, "max": 1,
+                                          "value": 0},
+                  box=(220, 60, 24, 100))
+    drawn = paint(held, skin)
+    _left, top, _width, height = held.content_box()
+    fill = skin.resolve("fill").fill
+    thumbc = skin.resolve("thumb").fill
+    bar = [op for op in drawn.ops_named("rect") if op.get("color") == fill][0]
+    thumb = [op for op in drawn.ops_named("rect")
+             if op.get("color") == thumbc][0]
+    assert bar.get("y") + bar.get("height") == pytest.approx(top + height), \
+        "the fill is grown from the floor"
+    assert bar.get("y") == pytest.approx(thumb.get("y") + thumb.get("height")), \
+        "the thumb sits on the top edge of the fill"
+    assert bar.get("height") > 0.0, "half of a -1..1 pan fills half the travel"
+
+
+def test_a_meter_grows_from_its_zero_end_and_says_its_name(root, skin):
+    held = placed(root, skin, "meter", {"label": "beat", "min": 0, "max": 1,
+                                        "value": 0.5},
+                  box=(20, 40, 24, 80))
+    drawn = paint(held, skin)
+    _left, top, _width, height = held.content_box()
+    level = [op for op in drawn.ops_named("rect")
+             if op.get("color") == skin.resolve("fill").fill]
+    assert len(level) == 1, "a neutral plate, one level bar"
+    assert level[0].get("height") == pytest.approx(height * 0.5, abs=1.0), \
+        "a vertical strip fills from its floor upward"
+    assert level[0].get("y") + level[0].get("height") == \
+        pytest.approx(top + height)
+    assert drawn.last("text").get("text") == "beat"
+
+
+def test_a_radio_lights_the_cell_it_holds_in_the_grid_the_press_reads(root, skin):
+    """Cell arithmetic shared with the hit test: the drawn cell is the pressable.
+
+    The held index wears the accent; the rest stay raised. The face lays its own
+    neutral plate first (a radio holding a non-first index would otherwise paint
+    the whole accent checkbox plate and swallow the unlit cells), so the lit cell
+    is found among the *cell-sized* rects, not the plate.
+    """
+    held = placed(root, skin, "radio", {"labels": ["sine", "tri", "saw"],
+                                        "columns": 3, "value": 1},
+                  box=(10, 10, 150, 40))
+    drawn = paint(held, skin)
+    left, _top, width, _height = held.content_box()
+    accent = skin.resolve("fill").fill
+    cells = [op for op in drawn.ops_named("rect") if op.get("width") < width * 0.6]
+    lit = [op for op in cells if op.get("color") == accent]
+    assert len(lit) == 1, "one held index, one lit cell"
+    # the lit cell is the middle third, the same third a press at 0.5 of the
+    # box lands in (behaviour._cell_at's arithmetic, in pixels)
+    cell = lit[0]
+    assert cell.get("x") <= left + width * 0.5 <= cell.get("x") + cell.get("width")
+    said = {op.get("text") for op in drawn.ops_named("text")}
+    assert said == {"sine", "tri", "saw"}, "every choice is written once"
+
+
+def test_a_knob_turns_its_pointer_with_its_value(root, skin):
+    """The dial: ticks outside, ring under the value, pointer at the angle.
+
+    The sweep is three quarters of a turn starting at the lower left, so the
+    pointer at rest points at 7 and at full swings to the lower right - and the
+    ring is an arc, never a closed circle, because a closed ring has no gap to
+    read the value off.
+    """
+    held = placed(root, skin, "knob", {"label": "Index", "min": 0, "max": 12,
+                                       "value": 0},
+                  box=(24, 24, 96, 96))
+    drawn = paint(held, skin)
+    assert drawn.count("circle") == 1, "the dial's face"
+    assert drawn.count("arc") == 1, "the empty ring; no value arc at zero"
+    ticks = drawn.ops_named("line")
+    assert len(ticks) == 12, "ten tick intervals and the pointer"
+    start, sweep = 0.375 * math.tau, 0.75 * math.tau
+    held.set("value", 12)
+    turned = paint(held, skin).ops_named("line")[-1]
+    got = math.atan2(turned.get("y2") - turned.get("y1"),
+                     turned.get("x2") - turned.get("x1")) % math.tau
+    assert got == pytest.approx((start + sweep) % math.tau, abs=0.02)
+    assert paint(held, skin).count("arc") == 2, "a full value arc at the top"
+
+
+def test_a_knob_draws_its_label_and_its_readout(root, skin):
+    held = placed(root, skin, "knob", {"label": "Index", "min": 0, "max": 12,
+                                       "value": 7},
+                  box=(24, 24, 96, 96))
+    said = [op.get("text") for op in paint(held, skin).ops_named("text")]
+    assert said == ["Index", "7"], "the word it was given, the number it holds"
 
 
 # -- gestures: what pressing and dragging each picture means --------------

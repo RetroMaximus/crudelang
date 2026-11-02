@@ -30,12 +30,13 @@ import pytest
 from crude.ui import (BEHAVIOURS, Handlers, InputRouter, MODS, Skin, Widget,
                       behaviour_for, define, define_prop, fraction_of,
                       get_kind, install_behaviour, logarithmic, reset, root_panel,
-                      span_of, top_at, value_at)
+                      span_of, top_at, typable, value_at)
 
-#: the kinds the table answers a gesture for: the seven faces and controls,
+#: the kinds the table answers a gesture for: the eight faces and controls,
 #: plus the four synth widgets a pointer can actually edit
-INTERACTIVE = ("slider", "vslider", "number", "toggle", "button", "radio",
-               "dropdown", "adsr", "curve", "xy", "keybed", "preset_bar")
+INTERACTIVE = ("slider", "vslider", "knob", "number", "toggle", "button",
+               "radio", "dropdown", "adsr", "curve", "xy", "keybed",
+               "preset_bar")
 
 #: the six it deliberately leaves still: the four that always were, and the two
 #: displays whose every pixel is whatever a script last pushed into ``data``
@@ -229,6 +230,43 @@ def test_a_vertical_range_runs_bottom_up(root):
     assert held.value == pytest.approx(0.0)
     held.on_drag(0.0, -0.25 * held.content_box()[3], 0)
     assert held.value == pytest.approx(25.0), "dragging up raises a level"
+
+
+def test_a_knob_never_jumps_at_the_press_because_a_dial_has_no_such_position(root):
+    """The one real difference between a knob and the slider it is built on.
+
+    A thumb has a place under the pointer; a dial's pointer has an *angle the
+    value already chose*, and a press that teleported there would overwrite a
+    number on its way to being nudged. The drag is still the vslider's own
+    vertical movement, measured on the same box.
+    """
+    held = placed(root, "knob", {"min": 0, "max": 12, "value": 7}, name="idx",
+                  box=(24, 24, 96, 96))
+    press(held, *along(held, 0.5, up=1.0))
+    assert held.value == 7.0, "the press that lands moves nothing"
+    held.on_drag(0.0, -0.25 * held.content_box()[3], 0)
+    assert held.value == pytest.approx(10.0), "a quarter of the box is a quarter"
+    held.on_drag(0.0, 0.5 * held.content_box()[3], 0)
+    assert held.value == pytest.approx(4.0), "and it runs back down the same way"
+
+
+def test_a_knob_answers_the_wheel_and_the_keys_but_refuses_the_typing(root):
+    """``editable False`` is the whole answer for a dial: no digits at it.
+
+    The keyboard and the wheel need no digits to be typed and no geometry to
+    be measured on, and a knob keeps both - what a knob refuses is the number
+    box's own door, because "typing 7 into a rotary" has no meaning.
+    """
+    held = placed(root, "knob", {"min": 0, "max": 12, "value": 7}, name="idx",
+                  box=(24, 24, 96, 96))
+    assert typable(held) is False
+    held.on_char("9")
+    held.on_key("enter")
+    assert held.value == 7.0, "no digit buffer was ever opened"
+    held.on_key("up")
+    assert held.value == pytest.approx(7.12), "an arrow is still a hundredth"
+    held.on_scroll(0.0, 16.0, 0)
+    assert held.value == pytest.approx(7.24), "one notch, one more hundredth"
 
 
 def test_a_number_box_is_measured_on_its_box_even_though_it_does_not_jump(root):
