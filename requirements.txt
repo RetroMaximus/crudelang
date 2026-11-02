@@ -1,0 +1,10 @@
+# Runtime dependencies for the crude runtime.
+# Verified to resolve as cp314 wheels on Python 3.14 (see docs/build.md).
+numpy>=2.2
+pillow>=12
+sounddevice>=0.5
+# pyaudio is deliberately absent: it is the audio fallback backend, optional at
+# runtime and without a cp314 wheel, so crude only looks for it if it is there.
+glfw>=2.7
+PyOpenGL>=3.1.7
+pyserial>=3.5

@@ -1,0 +1,30 @@
+# Environments
+.venv/
+.venv.broken/
+__pycache__/
+*.py[cod]
+
+# Generated Pd patch cache (disposable, rebuilt on demand)
+.crude_build/
+
+# Test / tooling output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+
+# Local logs
+.logs/
+logs/*.log
+
+# Vendored binaries (rebuilt / re-fetched on demand)
+third-party/
+libs/*.dll
+libs/*.lib
+
+# Disposable build caches and scratch output
+.jsondata/
+temp/
+logs/*.txt

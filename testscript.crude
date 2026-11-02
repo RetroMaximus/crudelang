@@ -1,0 +1,32 @@
+FUNC oopify(prefix) -> prefix + "oop"
+PRINT(oopify("l"))
+
+FUNC join(elements, separator)
+    VAR result = ""
+    VAR len = LEN(elements)
+
+    FOR i = 0 TO len THEN
+        VAR result = result + elements/i
+        IF i != len - 1 THEN VAR result = result + separator
+    END
+    RETURN result
+END
+
+FUNC map(elements, func)
+    VAR new_elements = []
+    VAR len = LEN(elements)
+    FOR i = 0 TO len THEN
+        VAR element = elements/i
+        VAR mapped = func(element)
+        APPEND(new_elements, mapped)
+    END
+    RETURN new_elements
+END
+
+PRINT("WE ARE JOINING loop, spoop!!!")
+
+# Test Comment here bro ham!!
+
+FOR i = 0 TO 5 THEN
+    PRINT(join(map(["l", "sp"], oopify), ", "))
+END

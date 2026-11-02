@@ -1,0 +1,94 @@
+# main.crude: a two-operator FM voice, authored by the script.
+#
+# The patch is not a file anyone has to open in Pd: PD_BUILD starts a document,
+# the PD_OBJ / PD_TABLE / PD_TEXT calls put boxes on it, PD_LINK wires them, and
+# PD_LOAD writes the .pd text into the project's build cache and hands it to
+# libpd. Run it twice and the second run reuses the cached file, because the
+# text - and therefore its hash - did not change.
+#
+# The sound is real from the first frame: carrier = [osc~] whose frequency is
+# the base pitch plus a modulator scaled by the modulation index, gated by an
+# envelope. The numbers that fill its table come from a file the manifest
+# declares, and the notes come from a preset the manifest declares too.
+#
+# An omitted trailing argument belongs to the binding, not to the script: a
+# variable called ``level`` here used to become the second argument of every bare
+# ``LOG(...)`` in the file, because the call looked it up by name and found it two
+# scopes away. The language no longer does that (see
+# tests/lang/test_binding_args.py), so this file is free to name its boxes what
+# they are - ``mix`` below is simply the name that was already here.
+#
+# Run it:   python -m crude run examples/fm_synth --mode headless
+# Check it: python -m crude check examples/fm_synth
+
+VAR p = PD_BUILD("fm", 520, 320)
+
+VAR r_pitch = PD_OBJ(p, "r pitch",   30,  30)
+VAR mtof    = PD_OBJ(p, "mtof 0.",   30,  60)
+VAR add     = PD_OBJ(p, "+~",        30,  90)
+VAR car     = PD_OBJ(p, "osc~",      30, 120)
+VAR r_index = PD_OBJ(p, "r index",  130,  30)
+VAR sig_idx = PD_OBJ(p, "sig~",     130,  60)
+VAR mod     = PD_OBJ(p, "osc~",     130,  90)
+VAR dev     = PD_OBJ(p, "*~",       130, 120)
+VAR r_gate  = PD_OBJ(p, "r gate",    30, 150)
+VAR env     = PD_OBJ(p, "line~",     30, 180)
+VAR r_gain  = PD_OBJ(p, "r gain",   130, 150)
+VAR sig_gain = PD_OBJ(p, "sig~",    130, 180)
+VAR amp     = PD_OBJ(p, "*~",        30, 210)
+VAR mix     = PD_OBJ(p, "*~",        30, 240)
+VAR out     = PD_OBJ(p, "dac~",      30, 280)
+VAR curve   = PD_TABLE(p, "modindex", 8, 260, 30)
+PD_TEXT(p, "modindex: filled from assets/modindex.txt", 240, 10)
+
+# pitch -> carrier, and the same pitch into the modulator so the ratio is 1:1
+PD_LINK(p, r_pitch, mtof)
+PD_LINK(p, mtof, add)
+PD_LINK(p, mtof, mod)
+# index -> deviation: the modulator's output scaled by the index
+PD_LINK(p, r_index, sig_idx)
+PD_LINK(p, sig_idx, dev, 0, 1)
+PD_LINK(p, mod, dev)
+PD_LINK(p, dev, add, 0, 1)
+# the summed frequency is what the carrier actually runs at
+PD_LINK(p, add, car)
+# gate opens the envelope, gain sets the level, both are signal-rate multiplies
+PD_LINK(p, r_gate, env)
+PD_LINK(p, r_gain, sig_gain)
+PD_LINK(p, car, amp)
+PD_LINK(p, env, amp, 0, 1)
+PD_LINK(p, amp, mix)
+PD_LINK(p, sig_gain, mix, 0, 1)
+PD_LINK(p, mix, out, 0, 0)
+PD_LINK(p, mix, out, 0, 1)
+
+PD_LOAD(p)
+
+# The array the manifest declared is parsed during loading; a script writes it
+# into a table once the patch that owns the table is open. Names stay unscoped
+# in the script - PD_ARRAY_WRITE resolves "$0-modindex" itself.
+VAR points = GET(RES("modindex"), "values")
+PD_ARRAY_WRITE(p, "modindex", points)
+LOG("modindex: " + STR(GET(RES("modindex"), "count")) + " number(s) parsed")
+
+# A preset is a bag of values, addressed by the name of its file.
+VAR bell = PRESET_LOAD("bell")
+PD_SEND(p, "pitch", GET(bell, "pitch"))
+PD_SEND(p, "index", GET(bell, "index"))
+PD_SEND(p, "gain", GET(bell, "gain"))
+PD_SEND(p, "gate", 1)
+
+# Saving one is the same door the other way: whatever the knobs would say.
+#
+#   PRESET_SAVE("new bell", [69, 7, 0.2])
+
+# Pd only renders while the stream is running, and the runtime starts silent so
+# a project that failed to load cannot make noise.
+PD_DSP(1)
+LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")
+
+# What is still to come, and what replaces the two lines above when it does:
+#
+#   VAR knob = KNOB("Index", 0, 12, 7)      # the widget stage answers the same
+#   PLACE(knob, 24, 24, 96, 96)             # receivers PD_SEND names here, so
+#   ON_CHANGE(knob, FUNC(v) -> PD_SEND(p, "index", v))   # the patch never changes

@@ -1,0 +1,38 @@
+# main.crude: the smallest project that runs.
+#
+# Everything a crude program can do without a window, a device or a patch is
+# here: LOG prints to the terminal and files what the run's log level keeps in
+# the project's own log (logs/hello-terminal.log), MODE() and FPS() describe the
+# run this manifest asked for, TIME() is the clock the frame loop paces itself
+# against, and STR()/NUM() turn values into words.
+#
+# Run it:  python -m crude run examples/hello_terminal
+# Check it: python -m crude check examples/hello_terminal
+
+LOG("hello from a crude project")
+LOG("this run is " + MODE() + " at " + STR(FPS()) + " fps")
+
+# A counting loop. VAR inside a WHILE body updates the variable the loop tests,
+# so this needs no separate counter and cannot run away.
+VAR line = 0
+WHILE line < 3 THEN
+    VAR line = line + 1
+    LOG(STR(line) + ": the script owns its own output")
+END
+
+# RES reaches the files the manifest declares, and EXIT answers a code the shell
+# can test. This project declares no files, so both are only mentioned.
+#
+#   LOG(GET(RES("readme"), "path"))
+#   EXIT(0)
+
+# LOG's second argument is the level. A debug line is not said out loud, so the
+# terminal stays clean while the detail is still on disk - and how much of the
+# run the file keeps is the run's own choice, since a project log defaults to
+# warnings and errors:
+#
+#   python -m crude run examples/hello_terminal --log info
+#   python -m crude run examples/hello_terminal --log debug
+LOG("the loop above counted three times", "debug")
+
+LOG("the run has taken " + STR(TIME()) + " second(s)")

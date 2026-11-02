@@ -1,0 +1,9 @@
+{
+  "crude_preset": 1,
+  "id": "brass",
+  "data": {
+    "pitch": 60,
+    "index": 2,
+    "gain": 0.35
+  }
+}

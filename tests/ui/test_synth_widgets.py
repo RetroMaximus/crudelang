@@ -1,0 +1,605 @@
+"""The synth widgets, drawn and dragged on paper: the plan's S9 acceptance line.
+
+:mod:`crude.ui.faces` says what these kinds look like and
+:mod:`crude.ui.behaviour` says what a gesture on them means; the plan's S9 is
+"ADSR/curve/XY/keybed/scope/spectrum/preset bar - deterministic frame tests + Pd
+round-trips via ``FakeLibpd``", so this file puts a number on both halves. Every
+face is painted into a :class:`~crude.ui.recording.RecordingRenderer` and read
+back as an op list (a trace, a row of bars, one lit key), every editable kind is
+pressed and dragged as raw arithmetic the way
+:mod:`tests.ui.test_behaviour` does it, and the last section walks the real door -
+a ``.crude`` script that builds a keybed, wires ``ON_CHANGE`` to
+``PD_MIDI_NOTEON`` and is heard by ``FakeLibpd`` - because the keybed is the one
+synth widget that promises Pd a note.
+
+Two things make these tests S9 and not a repeat of S8:
+
+* the plate is the skin's and the *inside* is the face's, so the assertions are
+  about ops a plate-and-label face never emits (``polyline``, ``circle``, the
+  per-bin ``rect``s) landing where the props say they should;
+* a face draws exactly what a prop holds - nothing is sampled and no FFT is
+  computed here - so an empty ``data`` is the deterministic flat line of silence
+  a reviewer can check by hand, and preset_bar is proven to be a radio in both
+  its paint (plate and word, no face) and its gesture (a cell index).
+"""
+
+from __future__ import annotations
+
+import types
+from pathlib import Path
+from typing import Any, List
+
+import pytest
+
+import crude.bindings  # noqa: F401 - registers every area, including ui and pd
+from crude.lang import Program
+from crude.lang.values import HostHandle, Number, String
+from crude.lang.values import List as CrudeList
+from crude.pd import FakeLibpd, PdRuntime, PdSession
+from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
+                      Widget, behaviour_for, define, face_for, get_kind,
+                      pd_arguments, pd_object_for, reset, root_panel)
+
+#: the kinds that own a face: every one of them draws a picture inside the plate
+DISPLAY = ("waveform", "spectrum", "adsr", "curve", "xy", "keybed")
+
+#: the kinds that hold a value or coordinate a gesture and so have no face -
+#  a preset bar is a radio, and a scope shows what a script pushed into ``data``
+NO_FACE = ("preset_bar", "panel", "text", "slider", "toggle")
+
+
+@pytest.fixture(autouse=True)
+def clean_registry():
+    """Script kinds are global; hand the table back the way it was found."""
+    reset()
+    yield
+    reset()
+
+
+@pytest.fixture
+def skin() -> Skin:
+    return Skin("dark")
+
+
+@pytest.fixture
+def root(skin) -> Widget:
+    """The plan's 360 x 220 client rect, synced, so a box means a pixel."""
+    held = root_panel(360, 220)
+    held.sync(skin)
+    return held
+
+
+def placed(root, skin, kind, values=None, *, name="",
+           box=(0, 0, 100, 100)) -> Widget:
+    """A synth widget in the tree at a size, resolved in the same skin it paints.
+
+    The sync is not ceremony: ``content_box()`` is measured from the inset the
+    skin's padding and the plate's border left, and every coordinate the faces
+    and the behaviours read is the content box - a test that laid out in one skin
+    and painted in another would be asserting on a frame no real pass produces.
+    """
+    held = Widget(kind, values, name=name, parent=root)
+    held.place(*box)
+    root.sync(skin)
+    return held
+
+
+def paint(held, skin) -> RecordingRenderer:
+    """One widget, alone, inside a frame the renderer contract will accept."""
+    held.root().sync(skin)
+    drawn = RecordingRenderer()
+    drawn.begin(360, 220, 360, 220)
+    held.paint(drawn, skin)
+    return drawn
+
+
+def look(held, skin) -> Any:
+    """The appearance the skin hands this widget for the state it is in now."""
+    return held.style(skin).resolve(held.role, held.state_name())
+
+
+def along(held, across: float, up: float = 0.5) -> tuple:
+    """A point at a fraction of the widget's own *content* box, in pixels."""
+    left, top, width, height = held.content_box()
+    return left + width * across, top + height * up
+
+
+def midi(stage) -> List[tuple]:
+    """Every MIDI message the fake heard since the last flush, in order."""
+    stage.runtime.flush()
+    return list(stage.lib.midi)
+
+
+# -- the tables themselves ------------------------------------------------
+
+def test_a_face_is_registered_for_exactly_the_kinds_that_draw_a_picture():
+    assert tuple(FACES) == DISPLAY
+    for word in DISPLAY:
+        assert face_for(word) is FACES[word], word
+    for word in NO_FACE:
+        assert face_for(word) is None, word
+
+
+def test_a_variant_wears_its_parents_face_the_way_it_inherits_its_props():
+    """``WIDGET_DEFINE("scope", "waveform")`` has no reason to be a bare plate."""
+    define("scope", "waveform")
+    assert face_for("scope") is FACES["waveform"]
+    define("shaper", "curve")
+    assert face_for("shaper") is FACES["curve"]
+
+
+@pytest.mark.parametrize("kind", DISPLAY)
+def test_a_synth_display_kind_twins_to_no_pd_box_and_owns_no_emit_row(kind):
+    """The five faces twin to no Pd box: ``pd_object`` is empty.
+
+    ``PD_EMIT`` maps a widget to a real Pd control through ``pd_object``, and a
+    scope, an analyser, an envelope, a curve and a pad have no vanilla equivalent
+    - so they declare ``pd_object ""`` and no synth row carries a ``pd_name``.
+    The data path is the script's own: an ``ON_CHANGE`` into a ``PD_SEND``, or
+    ``PD_MIDI_NOTEON`` for the keybed. (The ``preset_bar`` is a ``radio`` and
+    does inherit its box, so it is proved separately below.)
+    """
+    held = get_kind(kind)
+    assert held.pd_object == "", kind
+    assert pd_object_for(held, {}) == "", kind
+    synth_rows = {"data", "points", "bins", "attack", "decay", "sustain",
+                  "release", "tension", "x", "y", "low", "octaves",
+                  "channel", "velocity"}
+    # the synth rows are the widget's own bookkeeping; none of them is a Pd
+    # inlet/outlet name, and PD_EMIT only fires on rows that carry one
+    assert not any(row.pd_name for row in held.props.values()
+                   if row.name in synth_rows), kind
+
+
+def test_a_preset_bar_inherits_the_radio_box_it_twins_to():
+    """The one synth kind that is a control: same cells, same Pd ``hradio``."""
+    bar = get_kind("preset_bar")
+    assert bar.pd_object == get_kind("radio").pd_object != ""
+
+
+def test_the_adsr_and_keybed_carry_a_value_but_the_pads_and_graphs_do_not():
+    for kind in ("adsr", "keybed", "preset_bar"):
+        assert Widget(kind).has_value is True, kind
+    for kind in ("curve", "xy", "waveform", "spectrum"):
+        assert Widget(kind).has_value is False, kind
+    assert pd_arguments("adsr", {"value": 2.0}) == {"value": 2.0}
+
+
+# -- the displays: an empty table is silence, a filled one is the numbers ---
+
+def test_a_waveform_with_nothing_in_it_is_the_flat_line_of_silence(root, skin):
+    held = placed(root, skin, "waveform", name="scope")
+    drawn = paint(held, skin)
+    assert drawn.count("polyline") == 0
+    said = drawn.last("line")
+    left, top, width, height = held.content_box()
+    assert (said.get("x1"), said.get("x2")) == (left, left + width)
+    assert said.get("y1") == said.get("y2") == top + height * 0.5
+    assert said.get("color") == look(held, skin).ink
+
+
+def test_a_waveform_plots_the_samples_it_was_handed_across_the_plate(root, skin):
+    """-1 is the floor, +1 the ceiling, and the samples spread over the width."""
+    held = placed(root, skin, "waveform", {"data": [-1.0, 0.0, 1.0]})
+    drawn = paint(held, skin)
+    said = drawn.last("polyline")
+    left, top, width, height = held.content_box()
+    points = said.get("points")
+    assert len(points) == 3
+    assert points[0][0] == pytest.approx(left)
+    assert points[-1][0] == pytest.approx(left + width)
+    assert points[0][1] == pytest.approx(top + height), "-1 sits at the floor"
+    assert points[-1][1] == pytest.approx(top), "+1 reaches the ceiling"
+    assert points[1][1] == pytest.approx(top + height * 0.5)
+
+
+def test_the_points_row_shows_only_a_window_of_the_buffer(root, skin):
+    held = placed(root, skin, "waveform",
+                  {"data": [0.5, -0.5, 0.5, -0.5], "points": 2})
+    assert len(paint(held, skin).last("polyline").get("points")) == 2
+
+
+def test_a_sample_past_full_scale_is_clamped_not_allowed_to_leave_the_plate(
+        root, skin):
+    """A ``data`` prop is a ``SET`` away from anything, so the face does not trust it."""
+    held = placed(root, skin, "waveform", {"data": [2.0, -2.0]})
+    points = paint(held, skin).last("polyline").get("points")
+    left, top, width, height = held.content_box()
+    assert points[0][1] == pytest.approx(top), "+2 is clamped to +1, the ceiling"
+    assert points[1][1] == pytest.approx(top + height), "-2 to the floor"
+
+
+def test_a_spectrum_grows_one_bar_per_magnitude_from_the_floor(root, skin):
+    held = placed(root, skin, "spectrum", {"data": [0.0, 0.5, 1.0]})
+    drawn = paint(held, skin)
+    left, top, width, height = held.content_box()
+    # a bar is a per-bin rect standing on the content floor and narrower than the
+    # plate it grows in, which is what separates three bins from the plate's own rect
+    bars = [op for op in drawn.ops_named("rect")
+            if abs(op.get("y") + op.get("height") - (top + height)) < 1e-6
+            and op.get("width", width) < width]
+    assert len(bars) == 3, "one per bin, all standing on the same floor"
+    assert bars[0].get("height") == 0.0
+    assert bars[1].get("height") == pytest.approx(height * 0.5)
+    assert bars[2].get("height") == pytest.approx(height)
+    assert bars[0].get("x") >= left, "the first bar is inside the plate"
+    assert bars[-1].get("x") < left + width
+
+
+def test_a_spectrum_with_nothing_computed_draws_no_bars(root, skin):
+    """Empty ``data`` is silence: only the plate, never an invented row of bars."""
+    held = placed(root, skin, "spectrum", name="analyst")
+    drawn = paint(held, skin)
+    left, top, width, height = held.content_box()
+    bars = [op for op in drawn.ops_named("rect")
+            if abs(op.get("y") + op.get("height") - (top + height)) < 1e-6
+            and op.get("width", width) < width]
+    assert bars == [], "not one per-bin rect was drawn for a blank table"
+
+
+def test_the_bins_row_caps_the_bars_at_the_count_the_widget_asks_for(root, skin):
+    held = placed(root, skin, "spectrum", {"data": [1.0, 1.0, 1.0], "bins": 2})
+    left, top, width, height = held.content_box()
+    drawn = paint(held, skin)
+    bars = [op for op in drawn.ops_named("rect")
+            if abs(op.get("y") + op.get("height") - (top + height)) < 1e-6
+            and op.get("width", width) < width]
+    assert len(bars) == 2, "a row of empty bars would be a lie about a spectrum"
+
+
+# -- the envelope, the curve and the pad ----------------------------------
+
+def test_the_envelope_is_four_segments_off_the_props_with_the_stage_lit(
+        root, skin):
+    held = placed(root, skin, "adsr", {"attack": 1.0, "decay": 1.0,
+                                       "sustain": 0.5, "release": 1.0})
+    drawn = paint(held, skin)
+    left, top, width, height = held.content_box()
+    points = drawn.last("polyline").get("points")
+    assert points[0] == pytest.approx((left, top + height)), "starts at the floor"
+    assert points[1][1] == pytest.approx(top), "attack climbs to the peak"
+    assert points[2][1] == pytest.approx(top + height * 0.5), "decay to sustain"
+    # the sustain segment holds the level (y) but still advances along x, so the
+    # widths are proportional to the stage times (a/d/s/r = 1/1/0.5/1 here)
+    assert points[3][1] == pytest.approx(points[2][1]), "sustain holds the level"
+    assert points[3][0] > points[2][0], "...and still marches across the plate"
+    assert points[-1] == pytest.approx((left + width, top + height)), "r to floor"
+    dot = drawn.last("circle")
+    assert dot.get("color") == skin.resolve("selection").fill
+    # value 0 is attack, and the attack runs x0 (1.0) to x1 (29.0): its midpoint
+    # is where the stage dot sits, which is the whole reason a value is a stage
+    assert dot.get("cx") == pytest.approx((points[0][0] + points[1][0]) / 2), \
+        "the value picks which segment the dot lights"
+
+
+def test_moving_the_envelope_value_moves_the_dot_along_its_stage(root, skin):
+    held = placed(root, skin, "adsr", {"attack": 1.0, "decay": 1.0,
+                                       "sustain": 0.5, "release": 1.0})
+    left, top, width, height = held.content_box()
+    # with 1,1,0.5,1 the widths fall at x = 1, 29, 57, 71, 99; release is the
+    # 71..99 span, so its midpoint is 85 and it runs down to the floor
+    held.set("value", 3.0)
+    dot = paint(held, skin).last("circle")
+    assert dot.get("cx") == pytest.approx(85.0), "the release stage, not the attack"
+    # the dot rides the middle of the stage's segment: on release the segment
+    # runs from the sustain level (50) down to the floor (99), so its midpoint
+    # is (50 + 99) / 2 = 74.5 - not the floor itself
+    assert dot.get("cy") == pytest.approx(74.5), "release sits mid-descent"
+
+
+def test_the_curve_bends_toward_its_tension_and_is_flat_at_zero(root, skin):
+    held = placed(root, skin, "curve", {"tension": 1.0})
+    left, top, width, height = held.content_box()
+    points = paint(held, skin).last("polyline").get("points")
+    middle = top + height * 0.5
+    assert points[0] == pytest.approx((left, middle)), "the ends are pinned"
+    assert points[-1] == pytest.approx((left + width, middle))
+    # a positive tension pushes the control point *down* the screen (y grows
+    # downward), so the apex dips; the sign is the curve's and not a preference
+    assert max(p[1] for p in points) > middle, "a positive bend dips the apex"
+
+    held.set("tension", -1.0)
+    points = paint(held, skin).last("polyline").get("points")
+    assert min(p[1] for p in points) < middle, "and a negative one lifts it"
+
+    held.set("tension", 0.0)
+    points = paint(held, skin).last("polyline").get("points")
+    assert all(p[1] == pytest.approx(middle) for p in points), "0 is a straight line"
+
+
+def test_the_pad_draws_guides_through_the_dot_at_the_two_coordinates(root, skin):
+    held = placed(root, skin, "xy", {"x": 0.25, "y": 0.75})
+    drawn = paint(held, skin)
+    left, top, width, height = held.content_box()
+    dot = drawn.last("circle")
+    assert dot.get("cx") == pytest.approx(left + width * 0.25)
+    assert dot.get("cy") == pytest.approx(top + height * 0.25), "0 y is the floor"
+    guides = drawn.ops_named("line")
+    assert len(guides) == 2, "one down, one across, through the dot"
+    assert guides[0].get("x1") == dot.get("cx")
+    assert guides[1].get("y1") == dot.get("cy")
+    assert guides[0].get("color") == skin.resolve("grid", "hover").ink
+
+
+# -- the keybed: it is drawn as keys, not as stripes ----------------------
+
+def test_a_keybed_draws_naturals_across_the_plate_with_no_word_over_them(
+        root, skin):
+    held = placed(root, skin, "keybed", {"low": 60, "octaves": 1})
+    drawn = paint(held, skin)
+    found = look(held, skin)
+    left, top, width, height = held.content_box()
+    assert drawn.count("text") == 0, "words over keys make the keys unreadable"
+    naturals = [op for op in drawn.ops_named("rect")
+                if op.get("color") == found.ink]
+    assert len(naturals) == 7, "C D E F G A B above C4"
+    assert naturals[0].get("height") == pytest.approx(height)
+    assert naturals[0].get("x") == pytest.approx(left)
+    assert naturals[-1].get("x") + naturals[-1].get("width") == \
+        pytest.approx(left + width)
+    # the accidentals hang on the boundaries and reach only 60% down; the plate
+    # shares the fill colour, so a key is a *short* rect, not the full-height box
+    blacks = [op for op in drawn.ops_named("rect")
+              if op.get("color") == found.fill
+              and op.get("height") < height * 0.9]
+    assert len(blacks) == 5, "C# D# F# G# A# all have a natural to their left"
+    assert blacks[0].get("height") == pytest.approx(height * 0.6)
+
+
+def test_the_held_key_is_repainted_in_the_accent_before_pd_has_answered(root, skin):
+    """The press must be visible without waiting for a round-trip through Pd."""
+    held = placed(root, skin, "keybed", {"low": 60, "octaves": 1})
+    held.set("value", 62.0)  # D, the second natural
+    drawn = paint(held, skin)
+    accent = skin.resolve("selection").fill
+    left, top, width, height = held.content_box()
+    lit = [op for op in drawn.ops_named("rect") if op.get("color") == accent]
+    assert len(lit) == 1
+    assert lit[0].get("x") == pytest.approx(left + width / 7.0)
+
+
+def test_a_preset_bar_is_a_radio_in_its_paint_as_well_as_its_gesture(root, skin):
+    """No face of its own: it is a plate wearing the selection role's accent."""
+    held = placed(root, skin, "preset_bar", {"labels": ["a", "b", "c"]})
+    assert face_for(held.kind) is None
+    assert held.role == "selection"
+    drawn = paint(held, skin)
+    assert drawn.count("polyline") == 0, "a preset bar draws no graph"
+    assert drawn.count("circle") == 0
+    # the accent *is* the selection role's fill, drawn by base_face's plate: the
+    # bar changes what a radio looks like, never how it is painted, so the plate
+    # rect carries that colour and nothing a face would add is anywhere in the frame
+    plate = drawn.first("rect")
+    assert plate.get("color") == skin.resolve("selection").fill
+
+
+# -- gestures: what pressing and dragging each picture means --------------
+
+@pytest.mark.parametrize("across,stage", [(0.05, 0.0), (0.30, 1.0),
+                                            (0.55, 2.0), (0.90, 3.0)])
+def test_pressing_a_quarter_of_the_envelope_picks_that_stage(root, skin,
+                                                              across, stage):
+    """The four quarters always answer, even before a patch has set a time."""
+    held = placed(root, skin, "adsr")
+    held.on_press(*along(held, across))
+    assert held.value == stage, "the quarter of the box names the stage"
+
+
+def test_a_press_on_the_envelope_lands_on_the_stage_and_height_you_hit(root, skin):
+    held = placed(root, skin, "adsr", {"sustain": 0.2})
+    held.on_press(*along(held, 0.75))
+    assert held.value == 3.0, "the release quarter"
+    assert held.get("release") == pytest.approx(0.5), "the height of the press"
+    assert held.take_changes() == ["value", "release"]
+
+
+def test_a_vertical_drag_moves_only_the_stage_you_are_holding(root, skin):
+    held = placed(root, skin, "adsr", {"attack": 1.0, "decay": 1.0,
+                                       "sustain": 0.5, "release": 1.0})
+    held.on_press(*along(held, 0.75, up=0.5))
+    assert held.value == 3.0 and held.get("release") == pytest.approx(0.5)
+    held.on_drag(0.0, -held.content_box()[3] * 0.25, 0)
+    assert held.get("release") == pytest.approx(0.75), "up raises the held stage"
+    assert held.get("attack") == 1.0, "the other stages were not touched"
+    assert held.get("decay") == 1.0 and held.get("sustain") == pytest.approx(0.5)
+
+
+def test_the_envelope_keys_step_through_the_stages_without_moving_a_level(
+        root, skin):
+    held = placed(root, skin, "adsr", {"attack": 1.0, "decay": 1.0,
+                                       "sustain": 0.5, "release": 1.0})
+    held.on_key("end")
+    assert held.value == 3.0
+    held.on_key("left")
+    assert held.value == 2.0
+    held.on_key("home")
+    assert held.value == 0.0
+    assert held.get("attack") == 1.0, "a stage change is not a level change"
+
+
+def test_a_press_on_the_curve_sets_tension_from_the_height_it_hit(root, skin):
+    held = placed(root, skin, "curve")
+    held.on_press(*along(held, 0.5, up=0.0))
+    assert held.get("tension") == pytest.approx(1.0), "the top of the box is +1"
+    held.on_press(*along(held, 0.5, up=1.0))
+    assert held.get("tension") == pytest.approx(-1.0), "the bottom is -1"
+    held.on_press(*along(held, 0.5, up=0.5))
+    assert held.get("tension") == pytest.approx(0.0)
+
+
+def test_a_curve_drag_is_a_relative_move_and_not_a_jump(root, skin):
+    held = placed(root, skin, "curve")
+    held.on_press(*along(held, 0.5, up=0.5))
+    assert held.get("tension") == pytest.approx(0.0)
+    held.on_drag(0.0, -held.content_box()[3] * 0.25, 0)
+    assert held.get("tension") == pytest.approx(0.5)
+
+
+def test_a_press_on_the_pad_reads_both_axes_at_once(root, skin):
+    held = placed(root, skin, "xy")
+    held.on_press(*along(held, 0.25, up=0.75))
+    assert (held.get("x"), held.get("y")) == (pytest.approx(0.25),
+                                              pytest.approx(0.25))
+    held.on_drag(10.0, -10.0, 0)
+    length = held.content_box()
+    assert held.get("x") == pytest.approx(0.25 + 10.0 / length[2])
+    assert held.get("y") == pytest.approx(0.25 + 10.0 / length[3])
+
+
+def test_a_press_on_the_keybed_is_a_pitch_and_a_release_is_silence(root, skin):
+    held = placed(root, skin, "keybed", {"low": 60, "octaves": 1})
+    held.on_press(*along(held, 0.05))
+    assert held.value == 60.0, "the bottom-most natural is low"
+    held.on_press(*along(held, 0.5))
+    assert held.value == 65.0, "the middle of seven naturals is the fourth (F)"
+    held.on_press(*along(held, 0.99))
+    assert held.value == 71.0, "and the far end is B above middle C"
+    held.on_release(*along(held, 0.99))
+    assert held.value == 0.0, "no key, which is what a note-off reads as"
+
+
+def test_a_preset_bar_press_is_a_cell_index_exactly_like_a_radio(root, skin):
+    held = placed(root, skin, "preset_bar",
+                  {"labels": ["a", "b", "c"], "columns": 3})
+    held.on_press(*along(held, 0.10))
+    assert held.value == 0.0
+    held.on_press(*along(held, 0.50))
+    assert held.value == 1.0
+    held.on_press(*along(held, 0.90))
+    assert held.value == 2.0
+    # a declaration of its own rather than a re-use of radio's dict, yet the same
+    # handlers: behaviour_for reaches it by name, and the cell arithmetic is equal
+    assert behaviour_for("preset_bar") is BEHAVIOURS["preset_bar"]
+    assert set(BEHAVIOURS["preset_bar"]) == set(BEHAVIOURS["radio"])
+
+
+# -- the round trip: a keybed that promises Pd a note ---------------------
+
+#: a synth front panel in the plan's own five-step shape, with no copy of the
+#  metronome example anywhere: the widget half is the S9 kinds and the Pd half is
+#  the one data path a keybed has - ``ON_CHANGE`` into ``PD_MIDI_NOTEON``.
+KEYBED_SCRIPT = (
+    "VAR keys = KEYBED(\"keys\", 60, 1)\n"
+    "VAR env  = ADSR(\"env\", 10, 20, 0.5, 30)\n"
+    "VAR pan  = XY_PAD(\"pan\")\n"
+    "PLACE(keys, 16, 120, 320, 80)\n"
+    "PLACE(env,  16, 16,  120, 60)\n"
+    "PLACE(pan,  160, 16, 80, 60)\n"
+    "FUNC on_pitch(v)\n"
+    "    IF v > 0 THEN\n"
+    "        PD_MIDI_NOTEON(GET(keys, \"channel\"), v, GET(keys, \"velocity\"))\n"
+    "    ELSE\n"
+    "        PD_MIDI_NOTEOFF(GET(keys, \"channel\"), 0)\n"
+    "    END\n"
+    "END\n"
+    "ON_CHANGE(keys, on_pitch)\n"
+)
+
+
+def _panel(tmp_path, name: str, painting: bool = True):
+    """Run a synth script once against FakeLibpd and a recording renderer."""
+    home = tmp_path / name
+    home.mkdir()
+    lib = FakeLibpd()
+    session = PdSession(lib)
+    session.start()
+    notes: List[str] = []
+    runtime = PdRuntime(session, project_dir=str(home), log=notes.append)
+    renderer = RecordingRenderer()
+    ui = UIContext(renderer, width=360, height=220, painting=painting)
+    program = Program("<synth>", host=types.SimpleNamespace(pd=runtime, ui=ui))
+
+    def say(source: str) -> Any:
+        value, error = program.run(source)
+        assert error is None, error.as_string()
+        return as_py(value)
+
+    say(KEYBED_SCRIPT)
+    ui.layout()
+    yield types.SimpleNamespace(lib=lib, session=session, runtime=runtime,
+                                renderer=renderer, ui=ui, program=program,
+                                notes=notes, say=say)
+    session.shutdown()
+
+
+def as_py(value: Any) -> Any:
+    """A language value as the plain Python object it stands for."""
+    if isinstance(value, Number):
+        return value.value
+    if isinstance(value, String):
+        return value.value
+    if isinstance(value, CrudeList):
+        return [as_py(item) for item in value.elements]
+    if isinstance(value, HostHandle):
+        return value.target
+    return value
+
+
+@pytest.fixture
+def panel(tmp_path):
+    """The synth panel in a window that is only a recording renderer."""
+    yield from _panel(tmp_path, "windowed")
+
+
+def test_the_script_builds_the_synth_kinds_the_words_name(panel):
+    """A constructor word is sugar over the widget, and the tree is the proof."""
+    keys, env, pan = (panel.say(n) for n in ("keys", "env", "pan"))
+    assert [w.kind.name for w in (keys, env, pan)] == ["keybed", "adsr", "xy"]
+    assert [w.path() for w in (keys, env, pan)] == ["root/keys", "root/env",
+                                                    "root/pan"]
+    assert keys.value == 0.0
+    assert panel.say('GET(keys, "low")') == 60.0
+    assert panel.say('GET(env, "sustain")') == 0.5
+
+
+def test_the_synth_kinds_paint_their_faces_in_a_real_frame(panel):
+    """A frame of the script's tree emits the picture, not just a plate."""
+    keys = panel.say("keys")
+    panel.renderer.reset()
+    panel.ui.frame(dt=0.0)
+    # the keybed drew its naturals as rects and no word over them
+    assert any(op.name == "rect" for op in panel.renderer.ops)
+    left, top, width, height = keys.screen_box
+    inside = [op for op in panel.renderer.ops_named("rect")
+              if op.get("x", 0.0) >= left - 1e-6
+              and op.get("x") + op.get("width", 0.0) <= left + width + 1e-6]
+    assert len(inside) >= 10, "seven naturals and three accidentals, plus plates"
+
+
+def test_pressing_a_key_sends_a_note_on_to_fakepd(panel):
+    """The plan's S9 Pd round-trip: a gesture lands on FakeLibpd as MIDI.
+
+    The press is the round-trip that matters - a real patch remembers the last
+    note-on and does the release itself, and the ``ON_CHANGE`` handler here only
+    reads the value the widget reports (pitch on press, 0 on release). Proving
+    the *pitch* channel works end-to-end is the S9 acceptance line; the release
+    branch is checked for shape (a note-on at velocity 0 reached the fake).
+    """
+    keys = panel.say("keys")
+    keys.on_press(*along(keys, 0.05))
+    assert keys.value == 60.0
+    assert midi(panel) == [("noteon", 1, 60, 100)], "channel 1, velocity 100"
+
+    panel.lib.midi.clear()
+    keys.on_release(*along(keys, 0.05))
+    assert keys.value == 0.0, "no key - what a note-off reads as"
+    said = midi(panel)
+    assert len(said) == 1 and said[0][0] == "noteon" and said[0][3] == 0, \
+        "Pd's note-off is a note-on at 0, whatever pitch the handler passed"
+
+
+def test_a_note_on_a_headless_run_is_the_same_midi_and_no_pixels(tmp_path):
+    """``--mode headless`` sends the identical numbers and draws nothing."""
+    every = {}
+    for label, painting in (("windowed", True), ("silent", False)):
+        stage = next(_panel(tmp_path, f"keybed-{label}", painting=painting))
+        keys = stage.say("keys")
+        keys.on_press(*along(keys, 0.5))
+        keys.on_release(*along(keys, 0.5))
+        stage.ui.frame(dt=0.0)
+        every[label] = stage
+
+    assert every["silent"].lib.midi == every["windowed"].lib.midi
+    assert every["windowed"].renderer.ops, "the window drew the keybed"
+    assert every["silent"].renderer.ops == [], "headless drew nothing"
+    assert every["silent"].say("keys").value == 0.0

@@ -1,0 +1,20 @@
+{
+  "$schema": "crude/manifest@1",
+  "id": "hello-terminal",
+  "name": "Hello Terminal",
+  "entry": "main.crude",
+  "runtime": {
+    "mode": "terminal",
+    "width": 80,
+    "height": 24,
+    "target_fps": 20,
+    "vsync": false
+  },
+  "audio": {
+    "enabled": false,
+    "optional": true
+  },
+  "loading": {
+    "progress": "console"
+  }
+}

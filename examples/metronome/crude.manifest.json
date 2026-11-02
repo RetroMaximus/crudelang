@@ -1,0 +1,32 @@
+{
+  "$schema": "crude/manifest@1",
+  "id": "metronome",
+  "name": "Metronome",
+  "entry": "main.crude",
+  "runtime": {
+    "mode": "window",
+    "width": 360,
+    "height": 220,
+    "target_fps": 60,
+    "vsync": true
+  },
+  "ui": {
+    "theme": "dark",
+    "icons": "generated"
+  },
+  "audio": {
+    "backend": "sounddevice",
+    "sample_rate": 44100,
+    "block_size": 64,
+    "in_channels": 0,
+    "out_channels": 2,
+    "optional": false
+  },
+  "pd": {
+    "search_paths": ["pd"],
+    "build_dir": ".crude_build/pd"
+  },
+  "loading": {
+    "progress": "auto"
+  }
+}

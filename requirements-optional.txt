@@ -1,0 +1,3 @@
+# Optional audio backends. Only install if the default sounddevice backend is
+# unavailable for the target interpreter (wheels are not guaranteed on cp314).
+PyAudio>=0.2.14 ; python_version < "3.14"

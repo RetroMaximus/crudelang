@@ -1,0 +1,14 @@
+#N canvas 0 0 300 300 12;
+#X obj 40 40 osc~ 440;
+#X obj 40 80 *~ 0.3;
+#X obj 40 120 dac~;
+#X floatatom 40 200 5 0 0 0 freq freq -;
+#X msg 160 200 set $1;
+#X obj 200 40 table $0-wave 8;
+#A 0 0 0.5 1 0.5 0 -0.5 -1 -0.5;
+#X text 200 200 note: a \; test, $1;
+#X connect 0 0 1 0;
+#X connect 1 0 2 0;
+#X connect 1 0 2 1;
+#X connect 3 0 0 0;
+#X connect 4 0 0 0;

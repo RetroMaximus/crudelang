@@ -1,0 +1,51 @@
+# main.crude: a serial port in, Pure Data out.
+#
+# Headless on purpose: this is the shape that runs on a Pi over SSH, with no
+# window and no widget tree, and it is the same program as the windowed one -
+# the mode changes what is drawn, never what is wired.
+#
+# Two patches are in play, which is the normal Pd way of doing things:
+#
+#   pd/sensors.pd  declared in the manifest, so the loader opens it and Pd owns
+#                  the maths: [r level] / 1023 -> [s scaled] -> [r scaled] * 60
+#                  + 24 -> [s pitch]
+#   "voice"        authored below, and the thing this script has a handle for:
+#                  it sends "level" to the patch the loader opened (receiver
+#                  names are global unless a patch $0-scopes them, so any handle
+#                  can reach any receiver) and answers the "pitch" sensors.pd
+#                  hands back with an oscillator anyone can hear.
+#
+# Run it:  python -m crude run examples/sensor_bridge --no-serial
+# Check it: python -m crude check examples/sensor_bridge
+
+VAR p     = PD_BUILD("voice", 320, 240)
+VAR pitch = PD_OBJ(p, "r pitch",   20, 40)
+VAR mtof  = PD_OBJ(p, "mtof 0.",   20, 70)
+VAR osc   = PD_OBJ(p, "osc~",      20, 100)
+VAR amp   = PD_OBJ(p, "*~ 0.15",   20, 130)
+VAR out   = PD_OBJ(p, "dac~",      20, 170)
+PD_LINK(p, pitch, mtof)
+PD_LINK(p, mtof, osc)
+PD_LINK(p, osc, amp)
+PD_LINK(p, amp, out)
+PD_LINK(p, amp, out, 0, 1)
+PD_LOAD(p)
+
+# One declared link, by the id the manifest gives it. The codec is "line", so
+# what the handler gets is one line of text per call, off the reader thread and
+# on this one, where it is safe to talk to Pd.
+VAR port = SERIAL_OPEN("arduino")
+
+FUNC on_line(text)
+    PD_SEND(p, "level", NUM(text))
+END
+
+ON_SERIAL(port, on_line)
+
+# A port that stops talking is a bug in the firmware, not a reason to exit, so
+# the link is declared "optional" in the manifest and the run carries on without
+# it - which is what this line is for: a person watching the log can see the run
+# came up and is waiting.
+LOG("sensor-bridge: " + MODE() + " at " + STR(FPS()) + " fps")
+
+PD_DSP(1)

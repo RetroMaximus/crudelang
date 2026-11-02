@@ -1,0 +1,18 @@
+#N canvas 0 0 320 240 12;
+#X obj 20 30 r level;
+#X obj 20 60 / 1023;
+#X obj 20 90 s scaled;
+#X obj 20 120 r scaled;
+#X obj 20 150 * 60;
+#X obj 20 180 + 24;
+#X obj 20 210 s pitch;
+#X obj 180 30 r switch;
+#X obj 180 60 print sensor;
+#X text 20 250 the port writes one number a line: [r level] is where the
+#X text 20 265 script puts it, and [s pitch] is where this patch hands it back;
+#X connect 0 0 1 0;
+#X connect 1 0 2 0;
+#X connect 3 0 4 0;
+#X connect 4 0 5 0;
+#X connect 5 0 6 0;
+#X connect 7 0 8 0;
