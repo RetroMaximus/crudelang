@@ -13,8 +13,8 @@ The renderer never draws a glyph as a path. Every glyph is rasterised
 once, packed into a single texture, and every later draw is one textured
 quad with UV coordinates that point at the packed cell. The atlas object
 lives in :mod:`crude.ui.glyph` and is owned by the renderer; a script
-that says `P_GLYPH("play", 12, 12, 24)` reaches it through the same
-renderer the widget tree uses.
+that says `P_GLYPH(p, 12, 12, 24, 24, "play")` reaches it through the
+same renderer the widget tree uses.
 
 **Cache key.** A glyph is looked up by the tuple `(name, size, dpr,
 weight)`. Sizes snap to `12, 16, 20, 24, 32`; a request for `18` becomes

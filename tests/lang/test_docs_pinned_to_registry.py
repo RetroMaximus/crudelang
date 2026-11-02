@@ -19,14 +19,17 @@ Two doc shapes need two checks:
   ellipsis means the rest is not spelled out. The checks are deliberately
   robust against the docs' descriptive spellings (a list may say ``lo, hi``
   where the decorator says ``min, max``), so argument names are not compared.
-* ``manifest.md``/``architecture.md`` are prose/architecture pages that
-  reference bindings as bare words (```` ``MODE`` ````, ```` ``SERIAL_OPEN`` ````)
-  rather than calls, so they get a **name-existence** check: every
-  binding-shaped all-caps token must resolve to a ``REGISTRY`` entry, modulo a
-  curated allowlist of the legitimate non-binding vocabulary those pages use
-  (language keywords, exit-code constants, hardware/file-format acronyms). A
-  typo or a renamed binding is neither a real binding nor on that allowlist,
-  so it trips the test.
+* ``manifest.md``/``architecture.md``/``glyphs.md`` also reference bindings as
+  bare words (```` ``MODE`` ````, ```` ``SERIAL_OPEN`` ````, a ``P_RECT`` mention),
+  so they get an additional **name-existence** check: every binding-shaped
+  all-caps token must resolve to a ``REGISTRY`` entry, modulo a curated
+  allowlist of the legitimate non-binding vocabulary those pages use (language
+  keywords, exit-code constants, hardware/file-format acronyms). A typo or a
+  renamed binding is neither a real binding nor on that allowlist, so it trips
+  the test. That check runs ``_check_doc`` too, so a doc in this group is
+  guarded on both fronts - which is why ``glyphs.md``, with its ``P_GLYPH(...)``
+  call and its bare ``P_RECT`` mention, belongs here rather than in the
+  call-only group above.
 """
 
 from __future__ import annotations
@@ -46,22 +49,25 @@ NON_BINDINGS = {"FUNC"}
 #: an all-caps identifier immediately followed by an opening paren.
 CALL = re.compile(r"(?<![A-Za-z0-9_])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)\(")
 
-#: the two prose/architecture docs that name bindings as bare code-span words
-#  rather than ``NAME(...)`` calls, so only their name-existence is pinned.
-PROSE_DOCS = ("manifest.md", "architecture.md")
+#: the docs that carry bare code-span binding names (and any ``NAME(...)``
+#  calls) and so get the name-existence token check on top of the call-form
+#  arity check. glyphs.md is here because it uses both forms.
+PROSE_DOCS = ("manifest.md", "architecture.md", "glyphs.md")
 
 #: an all-caps identifier of two or more characters - a call's name or a bare
 #  code-span word. Single letters (sentence-initial capitals) are excluded.
 WORD = re.compile(r"\b([A-Z][A-Z0-9_]+)\b")
 
-#: every all-caps token the prose docs use that is legitimate but *not* a
+#: every all-caps token these docs use that is legitimate but *not* a
 #  binding: the language keywords, the ``EXIT_*`` codes from ``crude.errors``,
-#  and hardware/file-format acronyms. A typo or a renamed binding is neither
-#  in ``REGISTRY`` nor on this list, so it trips the name-existence check.
+#  and hardware/file-format acronyms (from ``glyphs.md``: DPR/UV/SHA/PNG/
+#  RGBA/GL/GPU/DPI/DIR). A typo or a renamed binding is neither in ``REGISTRY``
+#  nor on this list, so it trips the name-existence check.
 PROSE_NON_BINDINGS = frozenset({
     "AST", "CI", "CLI", "COM3",
     "EXIT_LOAD", "EXIT_MANIFEST", "EXIT_OK", "EXIT_RUNTIME", "EXIT_SCRIPT",
     "FUNC", "GLFW", "JSON", "TTF", "UI", "VAR", "WHILE",
+    "DIR", "DPI", "DPR", "GL", "GPU", "PNG", "RGBA", "SHA", "UV",
 })
 
 
@@ -195,14 +201,15 @@ def test_docs_actually_carry_binding_signatures(repo_root):
 
 
 def test_prose_docs_binding_names_resolve_to_the_registry(repo_root):
-    """No bare binding reference in a prose doc names a phantom or stale binding.
+    """No binding reference in a bare-name doc names a phantom or stale binding.
 
-    ``manifest.md`` and ``architecture.md`` call bindings out as code-span words
-    rather than ``NAME(...)`` signatures, so the only thing to pin is the name:
-    every all-caps token must either be a real ``REGISTRY`` binding or a known
-    non-binding term. Their ``NAME(...)`` calls (there are a couple, e.g.
-    ``EXIT(0)``) are checked for arity through the same ``_check_doc`` the
-    reference docs use, so a stale signature there trips too.
+    The docs in ``PROSE_DOCS`` (``manifest.md``, ``architecture.md``,
+    ``glyphs.md``) reference bindings as code-span words as well as - for
+    ``glyphs.md`` - ``NAME(...)`` calls, so two things are pinned here: every
+    all-caps token is either a real ``REGISTRY`` binding or a known non-binding
+    term, and every ``NAME(...)`` call (e.g. ``EXIT(0)``, ``P_GLYPH(p, x, y,
+    w, h, name)``) is arity-checked through the same ``_check_doc`` the
+    reference docs use, so a stale name or signature trips the test.
     """
     docs_dir = repo_root / "docs"
     failures: list[str] = []
