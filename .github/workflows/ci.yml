@@ -1,0 +1,102 @@
+name: CI
+
+# Run on pushes to the trunk, on every pull request, and on demand.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch supersedes an in-progress run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # The language/runtime test suite. pytest.ini deselects the tests
+  # marked requires_gl / requires_audio / requires_libpd / requires_serial,
+  # so this job needs no display, no audio device and no libpd - just the
+  # pip requirements. It runs on all three platforms.
+  # ------------------------------------------------------------------
+  tests:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run test suite
+        run: python -m pytest tests -v
+
+  # ------------------------------------------------------------------
+  # Cross-platform packaging: build the standalone `crude` executable
+  # with build.py and smoke-test the frozen binary. Gated on the tests.
+  #
+  # CI runners have no libpd and libs/*.dll is gitignored, so the bundle
+  # is produced with --skip-libs. `--verify` runs `crude --version`, which
+  # forces PyInstaller's import machinery to resolve the collected package
+  # - the part of a bundle most often broken - without needing libpd loaded.
+  #
+  # To additionally exercise the libpd staging + headless-run path, drop a
+  # platform libpd (libpd.so / libpd.dll / libpd.dylib) into libs/ before the
+  # build step (see README "Building the libpd library") and build without
+  # --skip-libs.
+  # ------------------------------------------------------------------
+  package:
+    name: package (${{ matrix.os }})
+    needs: tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Preview the build plan
+        run: python build.py --skip-libs --onefile --dry-run
+
+      - name: Build standalone executable and smoke-test it
+        run: python build.py --skip-libs --onefile --verify
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: crude-${{ matrix.os }}
+          path: |
+            dist/crude
+            dist/crude.exe
+          if-no-files-found: error
