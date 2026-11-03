@@ -221,7 +221,7 @@ script feeds them from `ON_FRAME`:
 - `PLOT(label)` (or `WIDGET("plot")`) - a line graph of *any* value list,
   autoscaled to the span the list itself holds: its own min and max set the
   axis, not a fixed full scale, so `SET(graph, "data",
-  PD_ARRAY_READ(patch, "modindex"))` graphs an array of whatever units it
+  PD_ARRAY_READ(patch, "carwave"))` graphs an array of whatever units it
   carries. A flat series is a level line, not a divide by zero; an empty
   list draws the frame and no trace.
 - `LOGVIEW(label)` (or `WIDGET("logview")`) - a scrollable text area. The

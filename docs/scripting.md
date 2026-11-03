@@ -114,13 +114,14 @@ VAR p = PD_BUILD("fm", 520, 320)
 VAR r_pitch = PD_OBJ(p, "r pitch", 30, 30)
 VAR mtof    = PD_OBJ(p, "mtof 0.", 30, 60)
 VAR car     = PD_OBJ(p, "osc~",    30, 120)
+VAR carwave = PD_TABLE(p, "carwave", 260, 300, 120)
 PD_LINK(p, r_pitch, mtof)
 PD_LINK(p, mtof, car)
 PD_LOAD(p)
 
 PD_SEND(p, "pitch", 69)
 PD_SEND_BANG(p, "trigger")
-PD_ARRAY_WRITE(p, "modindex", GET(RES("modindex"), "values"))
+PD_ARRAY_WRITE(p, "carwave", GET(RES("sqr"), "values"))
 ```
 
 Every send is *enqueued* to the Pd inbox and delivered on the next

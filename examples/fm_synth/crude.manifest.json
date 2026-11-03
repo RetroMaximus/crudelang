@@ -5,15 +5,14 @@
   "entry": "main.crude",
   "runtime": {
     "mode": "window",
-    "width": 640,
-    "height": 420,
+    "width": 1120,
+    "height": 640,
     "target_fps": 60,
     "vsync": true
   },
   "ui": {
     "theme": "dark",
-    "icons": "generated",
-    "workspaces": ["voices"]
+    "icons": "generated"
   },
   "audio": {
     "backend": "sounddevice",
@@ -30,7 +29,11 @@
   },
   "resources": {
     "arrays": [
-      { "id": "modindex", "file": "assets/modindex.txt", "format": "text" }
+      { "id": "sin", "file": "assets/sin.txt", "format": "text" },
+      { "id": "tri", "file": "assets/tri.txt", "format": "text" },
+      { "id": "sqr", "file": "assets/sqr.txt", "format": "text" },
+      { "id": "saw", "file": "assets/saw.txt", "format": "text" },
+      { "id": "wave", "file": "assets/wave.txt", "format": "text" }
     ],
     "presets": ["presets/*.json"]
   },

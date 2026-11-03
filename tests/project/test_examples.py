@@ -83,6 +83,19 @@ def cache_files(directory: str) -> list:
     return sorted(os.listdir(built)) if os.path.isdir(built) else []
 
 
+def numbers(path: Path) -> list:
+    """One declared array file, read the way the loader reads it.
+
+    ``#`` starts a comment and any mix of whitespace and commas separates the
+    numbers, so the test can compare what the manifest points at against what
+    the patch's table ended up holding without copying either of them here.
+    """
+    text = "\n".join(line for line in
+                     path.read_text(encoding="utf-8").splitlines()
+                     if not line.strip().startswith("#"))
+    return [float(word) for word in text.replace(",", " ").split()]
+
+
 # -- the four projects are the four the plan names ----------------------
 
 
@@ -184,8 +197,9 @@ def test_fm_synth_ships_the_numbers_and_the_patterns_it_sends(copied, capsys):
     assert main(["check", copied("fm_synth")]) == EXIT_OK
 
     out, _ = capsys.readouterr()
-    assert "resources 0 image, 0 sound, 1 array, 2 preset" in out
-    assert "3 declared file(s) are there" in out
+    # five waveform tables for the five voices, and the two shipped presets
+    assert "resources 0 image, 0 sound, 5 array, 2 preset" in out
+    assert "7 declared file(s) are there" in out
 
 
 def test_sensor_bridge_declares_the_port_and_the_patch_it_arrives_in(copied,
@@ -240,14 +254,16 @@ def test_hello_terminal_runs_and_speaks_for_itself(copied, nolib, capsys):
     assert said[-1].startswith("the run has taken ")
 
 
-def test_fm_synth_authors_its_patch_and_fills_its_table(copied, nolib, capsys):
+def test_fm_synth_authors_its_patch_and_fills_both_tables(copied, nolib, capsys):
     path = copied("fm_synth")
 
     assert main(["run", path, "--mode", "headless", "--no-audio",
                  "--progress", "none", "--frames", "0"]) == EXIT_OK
 
     out, _ = capsys.readouterr()
-    assert "modindex: 8 number(s) parsed" in out
+    # the shipped preset names the fourth voice, and the script wrote that table
+    assert "voice: wave - 260 samples" in out
+    assert "preset: bell - 17 value(s)" in out
     assert "is this patch's $0" in out
     assert "built fm-" in out
 
@@ -257,10 +273,19 @@ def test_fm_synth_authors_its_patch_and_fills_its_table(copied, nolib, capsys):
     # is what a run cannot leave silent by accident)
     assert ("message", "pd", "dsp", (1.0,)) in nolib.sent
 
-    # the numbers the manifest's array file holds are in the table the patch made
-    written = [values for name, values in nolib.arrays.items()
-               if name.endswith("-modindex")]
-    assert written == [[1.0, 0.707, 0.0, -0.707, -1.0, -0.707, 0.0, 0.707]]
+    # the numbers the manifest's array files hold are in the two tables the patch
+    # made: the carrier's is the bell preset's voice, the modulator's is a sine
+    # in every voice, and both are 260 long because the read wants four taps
+    def table(word: str) -> list:
+        held = [values for name, values in nolib.arrays.items()
+                if name.endswith("-" + word)]
+        assert len(held) == 1, (word, list(nolib.arrays))
+        return held[0]
+
+    home = Path(path)
+    assert table("carwave") == numbers(home / "assets" / "wave.txt")
+    assert table("modwave") == numbers(home / "assets" / "sin.txt")
+    assert len(table("carwave")) == 260
 
 
 def test_the_build_cache_is_written_once_and_reused_after(copied, nolib, capsys):
@@ -320,6 +345,6 @@ def test_the_copy_is_the_project_that_writes(copied, name):
 
 def test_a_missing_declared_file_is_a_load_error_not_a_manifest_one(copied):
     path = copied("fm_synth")
-    os.remove(os.path.join(path, "assets", "modindex.txt"))
+    os.remove(os.path.join(path, "assets", "sin.txt"))
 
     assert main(["check", path]) == EXIT_LOAD

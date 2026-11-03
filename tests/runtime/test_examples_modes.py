@@ -248,9 +248,9 @@ def test_the_fm_synth_cell_writes_its_patch_and_fills_its_table(copied, nolib,
     assert _run(path, "headless") == EXIT_OK
 
     out, _ = capsys.readouterr()
-    # the load ran the script, so the modindex table was written even with
-    # no audio and no tick pumped
-    assert "modindex: 8 number(s) parsed" in out
+    # the load ran the script, so the carrier's table was written from the
+    # preset's voice even with no audio and no tick pumped
+    assert "voice: wave - 260 samples" in out
 
 
 def test_the_sensor_cell_finds_its_link_by_id_on_the_loop(copied, nolib,

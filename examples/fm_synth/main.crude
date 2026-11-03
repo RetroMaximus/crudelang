@@ -6,376 +6,670 @@
 # libpd. Run it twice and the second run reuses the cached file, because the
 # text - and therefore its hash - did not change.
 #
-# The sound is real from the first frame: carrier = [osc~] whose frequency is
-# the base pitch plus a modulator scaled by the modulation index, gated by an
-# envelope. The numbers that fill its table come from a file the manifest
-# declares, and the notes come from a preset the manifest declares too.
+# It is a real FM voice. A modulator oscillator runs at a whole number of
+# harmonics of the carrier and pushes the carrier's own frequency by
+# (index x modulator Hz), and each oscillator has its own envelope generator.
+# Neither oscillator is an [osc~]: both read a wavetable, so the carrier's voice
+# - sin, tri, sqr, saw or the inharmonic table - is literally a write to the
+# table it is reading, and the plot on the right shows what Pd holds now.
 #
-# An omitted trailing argument belongs to the binding, not to the script: a
-# variable called ``level`` here used to become the second argument of every bare
-# ``LOG(...)`` in the file, because the call looked it up by name and found it two
-# scopes away. The language no longer does that (see
-# tests/lang/test_binding_args.py), so this file is free to name its boxes what
-# they are - ``mix`` below is simply the name that was already here.
+# The front panel is one page. The control surface that used to live on a second
+# scene is here in three sections of the root - ``voice``, ``modulator`` and
+# ``envelopes`` - each a group of the controls that belong together, foldable
+# from its header and droppable into the spare cell of the grid it sits in. The
+# Help menu opens a scrollable page that says the same in words.
 #
 # Run it:   python -m crude run examples/fm_synth
 #           The manifest asks for a window; the voice is silent until a person
-#           presses Play/Stop (it opens with gate 0), and a headless run - the
-#           no-window mode - has no button to press, so it sits silent on purpose.
+#           presses Play/Stop, and a headless run has no button to press, so it
+#           sits silent on purpose.
 # Check it: python -m crude check examples/fm_synth
+#           Pump it without a window:
+#           python -m crude run examples/fm_synth --mode headless --frames 3
 
-VAR p = PD_BUILD("fm", 640, 420)
+VAR p = PD_BUILD("fm", 960, 560)
 
-VAR r_pitch = PD_OBJ(p, "r pitch",   30,  30)
-VAR mtof    = PD_OBJ(p, "mtof 0.",   30,  60)
-VAR add     = PD_OBJ(p, "+~",        30,  90)
-VAR car     = PD_OBJ(p, "osc~",      30, 120)
-VAR r_index = PD_OBJ(p, "r index",  130,  30)
-VAR sig_idx = PD_OBJ(p, "sig~",     130,  60)
-VAR mod     = PD_OBJ(p, "osc~",     130,  90)
-VAR dev     = PD_OBJ(p, "*~",       130, 120)
-VAR r_gate  = PD_OBJ(p, "r gate",    30, 150)
-VAR env     = PD_OBJ(p, "line~",     30, 180)
-VAR r_gain  = PD_OBJ(p, "r gain",   130, 150)
-VAR sig_gain = PD_OBJ(p, "sig~",    130, 180)
-VAR r_level = PD_OBJ(p, "r level",  230, 150)
-VAR sig_level = PD_OBJ(p, "sig~ 1", 230, 180)
-VAR gateamp = PD_OBJ(p, "*~",       230, 210)
-VAR amp     = PD_OBJ(p, "*~",        30, 210)
-VAR r_cut   = PD_OBJ(p, "r cutoff", 230,  90)
-VAR scut    = PD_OBJ(p, "sig~ 2000",230, 120)
-VAR lp      = PD_OBJ(p, "lop~ 2000",130, 210)
-VAR mix     = PD_OBJ(p, "*~",        30, 240)
-VAR out     = PD_OBJ(p, "dac~",      30, 280)
-VAR curve   = PD_TABLE(p, "modindex", 8, 260, 30)
-PD_TEXT(p, "modindex: filled from assets/modindex.txt", 240, 10)
+# -- the control-rate side: pitch, ratio, index -------------------------
+#
+# [mtof] turns the MIDI number into a frequency and [t f f] hands that number to
+# both operators. [r ratio] is the harmonic selector (1f..5f), so the modulator
+# is always a whole multiple of the carrier; [r index] is the modulation index,
+# and in the usual Yamaha arithmetic the deviation in hertz is index x
+# modulator-Hz - which is what the two [*] boxes on this row compute. Everything
+# here is at control rate: a float from a [r] becomes a [sig~] and only then
+# meets a signal, because a bare number into a signal inlet is not a rate change.
+VAR r_pitch = PD_OBJ(p, "r pitch",  20,  30)
+VAR mtof    = PD_OBJ(p, "mtof 0.",  20,  60)
+VAR fan     = PD_OBJ(p, "t f f",    20,  90)
+VAR r_ratio = PD_OBJ(p, "r ratio", 120,  30)
+VAR mul_r   = PD_OBJ(p, "* 1",     120,  60)
+VAR r_index = PD_OBJ(p, "r index", 220,  30)
+VAR mul_i   = PD_OBJ(p, "* 1",     120,  90)
+VAR sig_car = PD_OBJ(p, "sig~",    320,  30)
+VAR sig_mod = PD_OBJ(p, "sig~",    320,  60)
+VAR sig_dev = PD_OBJ(p, "sig~",    320,  90)
 
-# pitch -> carrier, and the same pitch into the modulator so the ratio is 1:1
 PD_LINK(p, r_pitch, mtof)
-PD_LINK(p, mtof, add)
-PD_LINK(p, mtof, mod)
-# index -> deviation: the modulator's output scaled by the index
-PD_LINK(p, r_index, sig_idx)
-PD_LINK(p, sig_idx, dev, 0, 1)
-PD_LINK(p, mod, dev)
-PD_LINK(p, dev, add, 0, 1)
-# the summed frequency is what the carrier actually runs at
-PD_LINK(p, add, car)
-# gate opens the envelope, the Level knob trims how far it opens, gain sets the
-# output level - gate is a 0/1 trigger (line~), level is a constant multiplier so
-# Play and the knob never fight over one receiver
-PD_LINK(p, r_gate, env)
-PD_LINK(p, r_level, sig_level)
-PD_LINK(p, env, gateamp)
-PD_LINK(p, sig_level, gateamp, 0, 1)
-PD_LINK(p, r_gain, sig_gain)
-PD_LINK(p, car, amp)
-PD_LINK(p, gateamp, amp, 0, 1)
-# a lowpass shapes the tone after the envelope; the Cutoff knob drives
-# "cutoff" and a sig~ turns that control number into the filter's cutoff signal.
-# [vcf~] was tried first and rejected: it is a band-pass whose bandwidth inlet
-# is a float inlet, and left undriven that bandwidth is 0 - the measured output
-# was silence even tuned onto the signal.
-# [lop~] passes everything below the cutoff and its signal inlet is real.
+PD_LINK(p, mtof, fan)
+PD_LINK(p, fan, sig_car, 0, 0)
+PD_LINK(p, fan, mul_r, 1, 0)
+PD_LINK(p, r_ratio, mul_r, 0, 1)
+PD_LINK(p, mul_r, sig_mod)
+PD_LINK(p, mul_r, mul_i, 0, 0)
+PD_LINK(p, r_index, mul_i, 0, 1)
+PD_LINK(p, mul_i, sig_dev)
+
+# -- the modulator oscillator ------------------------------------------
+#
+# [phasor~] ramps 0..1 once per cycle, [*~ 256] scales that ramp to the 256
+# samples of one cycle and [+~ 1] steps over the guard sample at index 0, so the
+# four taps [tabread4~] wants are always inside the array - which is why the seam
+# where the cycle wraps is interpolated instead of clicking. The assets are 260
+# numbers for exactly this reason.
+VAR mod_ph  = PD_OBJ(p, "phasor~",               420, 150)
+VAR mod_sc  = PD_OBJ(p, "*~ 256",                520, 150)
+VAR mod_of  = PD_OBJ(p, "+~ 1",                  620, 150)
+VAR mod_wv  = PD_OBJ(p, "tabread4~ $0-modwave",  720, 150)
+VAR mod_ml  = PD_OBJ(p, "*~",                    420, 210)
+VAR mod_dv  = PD_OBJ(p, "*~",                    520, 210)
+
+PD_LINK(p, sig_mod, mod_ph)
+PD_LINK(p, mod_ph, mod_sc)
+PD_LINK(p, mod_sc, mod_of)
+PD_LINK(p, mod_of, mod_wv)
+PD_LINK(p, mod_wv, mod_ml, 0, 0)
+PD_LINK(p, mod_ml, mod_dv, 0, 0)
+PD_LINK(p, sig_dev, mod_dv, 0, 1)
+
+# -- the two envelopes --------------------------------------------------
+#
+# [vline~] is the reason there is no timing code here. It takes a list of
+# (value, milliseconds-to-get-there, milliseconds-from-here) triples and runs
+# them in order, so one message from the script is a whole attack-decay-sustain
+# and a second one is a release that starts from wherever the ramp happens to be.
+# The script owns the numbers, the patch owns the samples, and nobody needs a
+# bang when a ramp finishes.
+VAR r_cenv  = PD_OBJ(p, "r cenv",  20, 240)
+VAR cenv    = PD_OBJ(p, "vline~", 120, 240)
+VAR r_menv  = PD_OBJ(p, "r menv", 220, 240)
+VAR menv    = PD_OBJ(p, "vline~", 320, 240)
+PD_TEXT(p, "one [vline~] per oscillator: the script sends the whole ramp", 20, 265)
+PD_LINK(p, r_cenv, cenv)
+PD_LINK(p, r_menv, menv)
+PD_LINK(p, menv, mod_ml, 0, 1)
+
+# -- the carrier oscillator and the output ------------------------------
+VAR car_add = PD_OBJ(p, "+~",                     20, 330)
+VAR car_ph  = PD_OBJ(p, "phasor~",               120, 330)
+VAR car_sc  = PD_OBJ(p, "*~ 256",                220, 330)
+VAR car_of  = PD_OBJ(p, "+~ 1",                  320, 330)
+VAR car_wv  = PD_OBJ(p, "tabread4~ $0-carwave",  220, 360)
+VAR car_am  = PD_OBJ(p, "*~",                    120, 390)
+VAR r_cut   = PD_OBJ(p, "r cutoff",              320, 390)
+VAR scut    = PD_OBJ(p, "sig~ 2000",             420, 390)
+VAR lp      = PD_OBJ(p, "lop~ 2000",             220, 420)
+VAR r_gain  = PD_OBJ(p, "r gain",                320, 420)
+VAR sgain   = PD_OBJ(p, "sig~ 0.2",              420, 420)
+VAR amp     = PD_OBJ(p, "*~",                    220, 450)
+VAR out     = PD_OBJ(p, "dac~",                  320, 480)
+VAR carwave = PD_TABLE(p, "carwave", 260, 620, 300)
+VAR modwave = PD_TABLE(p, "modwave", 260, 620, 380)
+PD_TEXT(p, "carwave: the voice table, written from assets/*.txt", 620, 280)
+PD_TEXT(p, "modwave: the modulator's table, a sine in every voice", 620, 360)
+
+PD_LINK(p, sig_car, car_add, 0, 0)
+PD_LINK(p, mod_dv, car_add, 0, 1)
+PD_LINK(p, car_add, car_ph)
+PD_LINK(p, car_ph, car_sc)
+PD_LINK(p, car_sc, car_of)
+PD_LINK(p, car_of, car_wv)
+PD_LINK(p, car_wv, car_am, 0, 0)
+PD_LINK(p, cenv, car_am, 0, 1)
+# [lop~] shapes the tone after the envelope. [vcf~] was tried first and
+# rejected: it is a band-pass whose bandwidth inlet is a float inlet, and left
+# undriven that bandwidth is 0 - the measured output was silence even tuned onto
+# the signal. [lop~] passes everything below the cutoff and its second inlet is
+# a real signal inlet, so the Cutoff knob drives a [sig~] into it.
+PD_LINK(p, car_am, lp, 0, 0)
 PD_LINK(p, r_cut, scut)
-PD_LINK(p, amp, lp)
 PD_LINK(p, scut, lp, 0, 1)
-PD_LINK(p, lp, mix)
-PD_LINK(p, sig_gain, mix, 0, 1)
-PD_LINK(p, mix, out, 0, 0)
-PD_LINK(p, mix, out, 0, 1)
+PD_LINK(p, lp, amp, 0, 0)
+PD_LINK(p, r_gain, sgain)
+PD_LINK(p, sgain, amp, 0, 1)
+PD_LINK(p, amp, out, 0, 0)
+PD_LINK(p, amp, out, 0, 1)
 
 PD_LOAD(p)
 
-# The array the manifest declared is parsed during loading; a script writes it
-# into a table once the patch that owns the table is open. Names stay unscoped
-# in the script - PD_ARRAY_WRITE resolves "$0-modindex" itself.
-VAR points = GET(RES("modindex"), "values")
-PD_ARRAY_WRITE(p, "modindex", points)
-LOG("modindex: " + STR(GET(RES("modindex"), "count")) + " number(s) parsed")
+# The five waveform tables the manifest declares are parsed during loading; a
+# script writes one of them into the table the carrier reads, once the patch that
+# owns the table is open. Names stay unscoped in the script - PD_ARRAY_WRITE
+# resolves "$0-carwave" itself, and the object box was authored as
+# [tabread4~ $0-carwave] so Pd substitutes the same $0 at load.
+VAR VOICES = ["sin", "tri", "sqr", "saw", "wave"]
 
-# A preset is a bag of values, addressed by the name of its file.
-VAR bell = PRESET_LOAD("bell")
-PD_SEND(p, "pitch", GET(bell, "pitch"))
-PD_SEND(p, "index", GET(bell, "index"))
-PD_SEND(p, "gain", GET(bell, "gain"))
-# the voice opens silent: the gate is 0 until the Play button lifts it, so the
-# scope is a flat line at rest and only comes alive when a person asks for sound
-PD_SEND(p, "gate", 0)
+FUNC wave_word(which)
+    RETURN AT(VOICES, CLAMP(which, 0, 4))
+END
 
-# Saving one is the same door the other way: whatever the knobs would say.
+FUNC set_voice(which)
+    VAR word = wave_word(which)
+    PD_ARRAY_WRITE(p, "carwave", GET(RES(word), "values"))
+    LOG("voice: " + word + " - " + STR(GET(RES(word), "count")) + " samples")
+    RETURN word
+END
+
+# The modulator is a sine in every voice: a plain tone doing the pushing, so the
+# sidebands stay where the index and the ratio put them instead of carrying a
+# second tone's own harmonics on top.
+PD_ARRAY_WRITE(p, "modwave", GET(RES("sin"), "values"))
+
+# -- the front panel ---------------------------------------------------
 #
-#   PRESET_SAVE("new bell", [69, 7, 0.2])
+# Everything is on ``root``, the entry script's own scene: three sections in a
+# dockable grid on the left, the transport and the two displays on the right, and
+# the status band along the bottom. No second page, no workspace switch - the
+# sections are ordinary groups on the page a person opens the window onto.
+VAR deck      = PANEL("")
+VAR side      = PANEL("")
+VAR voice     = GROUP("voice", deck)
+VAR modifier  = GROUP("modulator", deck)
+VAR envelopes = GROUP("envelopes", deck)
 
-# Pd only renders while the stream is running, and the runtime starts silent so
-# a project that failed to load cannot make noise.
-PD_DSP(1)
-LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")
+# section one: what the carrier is made of. The voice strip picks the table, and
+# the two knobs under it shape the sound that table produces - the peak its
+# envelope opens to and the cutoff the sidebands come out through. Two knobs that
+# belong to the same question share a box, because a section of one knob would be
+# a list, not a panel.
+VAR wave_note = TEXT("waveform")
+VAR waves     = RADIO(["sin", "tri", "sqr", "saw", "wave"], 0)
+VAR vknobs    = PANEL("")
+VAR level     = KNOB("Level", 0, 1, 1)
+VAR cutoff    = KNOB("Cutoff", 20, 20000, 2000)
 
-# A widget wired back into the patch. A knob is not a box vanilla Pd ships, so
-# its twin is an [hslider] - PD_EMIT writes the range the patch already reads,
-# and dragging the dial sends "index" straight in, the way a hardware knob does.
-#
-# The control surface is split over two named scenes of this one window (see
-# "Workspaces" in docs/bindings.md): the page below is ``root``, the entry
-# script's own - what a person plays with - and the FM parameters live on a
-# second page called ``voices``, built out of a scroll area. The manifest
-# declares the name of that second page, and the View menu lists both.
-VAR pitch = NUMBER("Pitch", 0, 127, 69)
-VAR gain  = SLIDER("Gain", 0, 1, 0.2)
-VAR dsp   = TOGGLE("DSP", 1)
-VAR play  = TOGGLE("Play/Stop")
+# section two: how far the modulator pushes and how hard. The harmonic strip is
+# the ratio, the index is the deviation in multiples of the modulator's own
+# frequency, and depth is the peak of the modulator's envelope - a modulator that
+# is closed leaves the voice bare, which is a feature rather than a bug.
+VAR harm_note = TEXT("harmonic")
+VAR harm      = RADIO(["1f", "2f", "3f", "4f", "5f"], 1)
+VAR mknobs    = PANEL("")
+VAR index     = KNOB("Index", 0, 12, 3)
+VAR depth     = KNOB("Depth", 0, 1, 1)
 
-PLACE(pitch, 24,  52,  96, 26)
-PLACE(gain,  24,  90, 150, 24)
-PLACE(dsp,   24,  224, 96, 28)
-PLACE(play,  24,  260, 120, 30)
+# section three: the two envelopes and the span they are measured over - three
+# controls that mean nothing apart, since an envelope is only a shape until a
+# span says how long that shape takes.
+VAR erow      = PANEL("")
+VAR cadsr     = ADSR("carrier", 0.05, 0.3, 0.2, 0.6)
+VAR madsr     = ADSR("modulator", 0.02, 0.25, 0.15, 0.35)
+VAR span      = KNOB("Span ms", 50, 4000, 1800)
 
-# the gain slider is the one control on this page whose length is its resolution:
-# ``grow`` keeps the fraction of the page 150 px of it was, so a wider window buys
-# a longer throw rather than a wider right margin (docs/widgets.md, "Placement and
-# layout" - the verbs are the same layout engine the dialogs are built with)
-PACK(gain, "grow", "fixed")
+# the transport, the displays and the status band
+VAR title   = TEXT("FM SYNTH")
+VAR pitch   = NUMBER("Pitch", 0, 127, 69)
+VAR gain    = SLIDER("Gain", 0, 1, 0.2)
+VAR play    = TOGGLE("Play/Stop")
+VAR dsp     = TOGGLE("DSP", 1)
+VAR scope   = WAVEFORM("Output")
+VAR graph   = PLOT("wavetable")
+VAR log     = LOGVIEW("status")
 
+PLACE(deck,      16,  44, 804, 508)
+PLACE(side,     836,  44, 268, 508)
+PLACE(log,       16, 564, 1088,  60)
+PACK(deck, "fill", "fill")
+PACK(side, "fixed", "fill")
+PACK(log, "fill", "fixed")
+PAD(deck, 0)
+PAD(side, 0)
+
+# the three sections share the deck's two columns, so the fourth cell is the one
+# a band can be dropped into: the cells a grid has are the cells its children
+# need, and a grid in which every cell is taken offers a hand nowhere. A grid
+# draws its cells only while a drag is in progress, so the spare is invisible
+# until somebody is holding something.
+GRID(deck, 2, 18, ["align", "start", "dockable", 1])
+PACK(voice, "fill", "fixed")
+PACK(modifier, "fill", "fixed")
+PACK(envelopes, "fill", "fixed")
+SET(voice, "dockable", 1)
+SET(modifier, "dockable", 1)
+SET(envelopes, "dockable", 1)
+
+# one column per section, one row per knob group: the x- and y-arithmetic this
+# script used to do in its head is the row's answer, and a group measures its own
+# height from what its body holds rather than from a number written here.
+VSTACK(voice, 8, ["align", "stretch"])
+VSTACK(modifier, 8, ["align", "stretch"])
+VSTACK(envelopes, 8, ["align", "stretch"])
+PAD(vknobs, 0)
+PAD(mknobs, 0)
+PAD(erow, 0)
+HSTACK(vknobs, 16, ["align", "center"])
+HSTACK(mknobs, 16, ["align", "center"])
+HSTACK(erow, 8, ["align", "center"])
+PACK(vknobs, "fill", "fixed")
+PACK(mknobs, "fill", "fixed")
+PACK(erow, "fill", "fixed")
+
+# every child is sized here and placed by its row: a cell centres what it is
+# given, a stack lines what it is handed up or down, and the width below is the
+# cell's own rather than the window's.
+PLACE(wave_note, 0, 0, 381, 18)
+PLACE(waves, 0, 0, 381, 26)
+PLACE(vknobs, 0, 0, 381, 112)
+PLACE(level, 0, 0, 96, 96)
+PLACE(cutoff, 0, 0, 96, 96)
+NODE_ADD(voice, wave_note)
+NODE_ADD(voice, waves)
+NODE_ADD(voice, vknobs)
+NODE_ADD(vknobs, level)
+NODE_ADD(vknobs, cutoff)
+
+PLACE(harm_note, 0, 0, 381, 18)
+PLACE(harm, 0, 0, 381, 26)
+PLACE(mknobs, 0, 0, 381, 112)
+PLACE(index, 0, 0, 96, 96)
+PLACE(depth, 0, 0, 96, 96)
+NODE_ADD(modifier, harm_note)
+NODE_ADD(modifier, harm)
+NODE_ADD(modifier, mknobs)
+NODE_ADD(mknobs, index)
+NODE_ADD(mknobs, depth)
+
+PLACE(erow, 0, 0, 381, 130)
+PLACE(cadsr, 0, 0, 140, 130)
+PLACE(madsr, 0, 0, 140, 130)
+PLACE(span, 0, 0, 72, 96)
+NODE_ADD(envelopes, erow)
+NODE_ADD(erow, cadsr)
+NODE_ADD(erow, madsr)
+NODE_ADD(erow, span)
+
+# a radio strip is only a strip when it says how many columns it has: with the
+# row left at 0 the box is a single column, which is what the wheel and the
+# arrows step through
+SET(waves, "columns", 5)
+SET(harm, "columns", 5)
+
+# a log-scale cutoff (20..20000 Hz), names above the dials, and readouts that
+# show the digits a person actually reads off them
+SET(cutoff, "log", 1)
+SET(wave_note, "role", "caption")
+SET(harm_note, "role", "caption")
+SET(level, "label_place", "top")
+SET(cutoff, "label_place", "top")
+SET(index, "label_place", "top")
+SET(depth, "label_place", "top")
+SET(span, "label_place", "top")
+SET(level, "decimals", 2)
+SET(depth, "decimals", 2)
+SET(index, "decimals", 1)
+SET(cutoff, "decimals", 0)
+SET(span, "decimals", 0)
+
+# the right-hand column is the only hand-placed panel here: one column of
+# transport with the two canvases under it, the plot being the one widget that
+# grows when the window does. Every one of them is *in* the panel - PLACE and
+# ANCHOR are read against the parent a NODE_ADD chose, so a control that was
+# never added to the side column would be placed against the window and land on
+# top of the sections it was meant to sit beside.
+PLACE(title, 0, 0, 268, 22)
+PLACE(pitch, 0, 30, 140, 26)
+PLACE(gain, 0, 64, 268, 26)
+PLACE(play, 0, 98, 130, 30)
+PLACE(dsp, 146, 98, 122, 30)
+PLACE(scope, 0, 136, 268, 180)
+PLACE(graph, 0, 324, 268, 184)
+NODE_ADD(side, title)
+NODE_ADD(side, pitch)
+NODE_ADD(side, gain)
+NODE_ADD(side, play)
+NODE_ADD(side, dsp)
+NODE_ADD(side, scope)
+NODE_ADD(side, graph)
+PACK(title, "fill", "fixed")
+PACK(pitch, "fixed", "fixed")
+PACK(gain, "fill", "fixed")
+PACK(play, "fixed", "fixed")
+PACK(dsp, "fixed", "fixed")
+PACK(scope, "fill", "fixed")
+PACK(graph, "fill", "fill")
 SET(play, "glyph_off", "play")
 SET(play, "glyph_on", "pause")
+SET(title, "role", "title")
 
-# the two canvases that belong to the pitch-and-level page: a scope of the output
-# and a line of text the frame handler rewrites from whatever the controls say.
-# (the modindex graph is on the voices page, beside the parameter it graphs)
-VAR scope = WAVEFORM("Output")
-VAR log   = LOGVIEW("log")
-PLACE(scope, 336,  52, 280, 150)
-PLACE(log,     0, 390, 640,  30)
+# The deck is as wide as the window leaves it and as tall as the status band is
+# not; the side column keeps its 268 px and rides the right edge. The numbers
+# above are only the 1120 x 640 this file was written in - what each row keeps
+# from PLACE is the axis no glue owns (docs/widgets.md, "Placement and layout").
+ANCHOR(deck, "left", "parent", "left", 16)
+ANCHOR(deck, "top", "parent", "top", 44)
+ANCHOR(deck, "right", side, "left", -16)
+ANCHOR(deck, "bottom", log, "top", -12)
+ANCHOR(side, "right", "parent", "right", -16)
+ANCHOR(side, "top", "parent", "top", 44)
+ANCHOR(side, "bottom", log, "top", -12)
+ANCHOR(scope, "left", "parent", "left", 0)
+ANCHOR(scope, "right", "parent", "right", 0)
+ANCHOR(scope, "top", "parent", "top", 136)
+ANCHOR(graph, "left", "parent", "left", 0)
+ANCHOR(graph, "right", "parent", "right", 0)
+ANCHOR(graph, "top", scope, "bottom", 8)
+ANCHOR(graph, "bottom", "parent", "bottom", 0)
+ANCHOR(log, "left", "parent", "left", 16)
+ANCHOR(log, "right", "parent", "right", -16)
+ANCHOR(log, "bottom", "parent", "bottom", -16)
 
-# the scope is the room between the control column and the page's right margin, and
-# the status line is the page's bottom band, so both are glued to the edges instead
-# of left at the numbers above - which are only right for the 640 x 420 window this
-# file was written in. A panel puts its children at its own content box and the root
-# has no border of its own to take off it, so the content box is the client rect:
-# at 640 wide the glues answer exactly the 280 and the 640 above, and at 900 they
-# answer 540 and 900 - the 260 px a placed 280 would have left between the scope's
-# right edge and the margin it was meant to stop at.
-# What each row keeps from PLACE is the axis no glue owns - the scope's y and
-# height, the line's height - because a glue that is not there does not invent one.
-ANCHOR(scope, "left", "parent", "left", 336)
-ANCHOR(scope, "right", "parent", "right", -24)
-ANCHOR(log, "left")
-ANCHOR(log, "right")
-ANCHOR(log, "bottom")
+# -- the help page ------------------------------------------------------
+#
+# A dialog the script builds out of ordinary widgets: a panel glued to the four
+# edges of the window, a word across the top, a text pane long enough to need the
+# wheel, and one button that puts it away. It is built before the menu bar,
+# because there is no RAISE verb - the order widgets are added in *is* the order
+# they are drawn in, so the bar and its popups have to come later than the page
+# they are meant to sit above.
+#
+# The body is a log view rather than a stack of labels for one reason: a log view
+# scrolls itself, and every text face in this library truncates instead of
+# wrapping, so paragraphs would have to be cut to length by hand either way.
+# Cutting them to length here is honest - the pane is the width it is - and the
+# wheel, the thumb and the page keys come free with it.
+VAR help       = PANEL("")
+VAR help_title = TEXT("FM SYNTH - help")
+VAR help_page  = LOGVIEW("help")
+VAR help_close = BUTTON("Close")
 
+VAR words = []
+APPEND(words, "FM SYNTH - a two-operator voice the script builds and wires itself")
+APPEND(words, "")
+APPEND(words, "THE PATCH")
+APPEND(words, "Two [phasor~] oscillators read wavetables. The modulator's output is")
+APPEND(words, "scaled by the modulation index and added to the carrier's own")
+APPEND(words, "frequency, so the sidebands sit at carrier +/- n x modulator. Each")
+APPEND(words, "oscillator has its own [vline~]: the carrier's opens the sound, the")
+APPEND(words, "modulator's decides how far the push goes while a note holds.")
+APPEND(words, "")
+APPEND(words, "THE PAGE")
+APPEND(words, "One page, three sections, in a two-column grid.")
+APPEND(words, "voice      the table the carrier reads, the level its envelope opens")
+APPEND(words, "           to, and the lowpass the sidebands come out through.")
+APPEND(words, "modulator  which harmonic it runs at (1f..5f), the index, and depth.")
+APPEND(words, "envelopes  one ADSR per oscillator and the span they are measured")
+APPEND(words, "           over.")
+APPEND(words, "")
+APPEND(words, "FOLD AND DOCK")
+APPEND(words, "Click a section's chevron and its body folds away, leaving the band.")
+APPEND(words, "Hold a band and drag it and the grid shows its cells. Three sections")
+APPEND(words, "in two columns leave one cell free, and that is where a band can be")
+APPEND(words, "dropped. View does the same from the menu, and One at a time turns")
+APPEND(words, "the deck into an accordion, so opening one closes the other two.")
+APPEND(words, "")
+APPEND(words, "THE ENVELOPES ARE FRACTIONS")
+APPEND(words, "An ADSR drag writes a fraction of a span and the Span knob says how")
+APPEND(words, "long a whole envelope is - 1800 ms in the bell, so an attack of half")
+APPEND(words, "is 900 ms. The script multiplies and sends one list to [vline~],")
+APPEND(words, "which owns the timing, so nothing has to be told when a ramp ends.")
+APPEND(words, "")
+APPEND(words, "VOICES")
+APPEND(words, "sin tri sqr saw are band-limited tables and wave is an inharmonic")
+APPEND(words, "one. Picking a voice rewrites the table the carrier is reading, and")
+APPEND(words, "the plot at the bottom right is that table read back out of Pd.")
+APPEND(words, "")
+APPEND(words, "PRESETS")
+APPEND(words, "File - Save preset writes the seventeen numbers the panel holds, and")
+APPEND(words, "Load reads them back in the same order, so what Save writes is what")
+APPEND(words, "Load reads. presets/bell.json and presets/brass.json are shipped.")
+APPEND(words, "")
+APPEND(words, "AUDIO")
+APPEND(words, "Play/Stop opens both envelopes, DSP starts and stops the stream, and")
+APPEND(words, "the Audio and MIDI menus open the runtime dialogs - which are,")
+APPEND(words, "themselves, scroll areas with an Apply and a Cancel under them.")
+SET(help_page, "lines", words)
+
+PLACE(help, 140, 44, 840, 500)
+PLACE(help_title, 12, 12, 816, 22)
+PLACE(help_page, 12, 42, 816, 418)
+PLACE(help_close, 12, 468, 110, 26)
+PACK(help, "fill", "fill")
+PACK(help_page, "fill", "fill")
+NODE_ADD(help, help_title)
+NODE_ADD(help, help_page)
+NODE_ADD(help, help_close)
+SET(help_title, "role", "title")
+ANCHOR(help, "left", "parent", "left", 140)
+ANCHOR(help, "right", "parent", "right", -140)
+ANCHOR(help, "top", "parent", "top", 44)
+ANCHOR(help, "bottom", "parent", "bottom", -96)
+ANCHOR(help_title, "left", "parent", "left", 12)
+ANCHOR(help_title, "right", "parent", "right", -12)
+ANCHOR(help_title, "top", "parent", "top", 12)
+ANCHOR(help_page, "left", "parent", "left", 12)
+ANCHOR(help_page, "right", "parent", "right", -12)
+ANCHOR(help_page, "top", help_title, "bottom", 8)
+ANCHOR(help_page, "bottom", help_close, "top", -10)
+ANCHOR(help_close, "left", "parent", "left", 12)
+ANCHOR(help_close, "bottom", "parent", "bottom", -12)
+
+# Off means not drawn *and not hit-tested*: a panel the pointer cannot see cannot
+# hide anything either, so closing the page takes its whole subtree out of the
+# way instead of leaving an invisible wall over the panel behind it.
+SET(help, "visible", 0)
+
+# -- what the controls do ----------------------------------------------
+#
+# The envelope lists are built here because the values are here. The panel holds
+# fractions of a span measured in milliseconds and [vline~] wants milliseconds, so
+# one multiplication is the whole conversion - a fraction with no maximum is the
+# widget's answer, and the span is the script's way of giving it a unit.
+FUNC carrier_env()
+    VAR ms = GET(span, "value")
+    VAR a = GET(cadsr, "attack") * ms
+    VAR d = GET(cadsr, "decay") * ms
+    VAR r = GET(cadsr, "release") * ms
+    VAR on = [GET(level, "value"), a, 0.0, GET(cadsr, "sustain"), d, a]
+    VAR off = [0.0, r, 0.0]
+    IF GET(play, "value") > 0 THEN
+        PD_SEND_LIST(p, "cenv", on)
+    ELSE
+        PD_SEND_LIST(p, "cenv", off)
+    END
+    RETURN 0
+END
+
+FUNC modulator_env()
+    VAR ms = GET(span, "value")
+    VAR a = GET(madsr, "attack") * ms
+    VAR d = GET(madsr, "decay") * ms
+    VAR r = GET(madsr, "release") * ms
+    VAR on = [GET(depth, "value"), a, 0.0, GET(madsr, "sustain"), d, a]
+    VAR off = [0.0, r, 0.0]
+    IF GET(play, "value") > 0 THEN
+        PD_SEND_LIST(p, "menv", on)
+    ELSE
+        PD_SEND_LIST(p, "menv", off)
+    END
+    RETURN 0
+END
+
+FUNC refresh()
+    carrier_env()
+    modulator_env()
+    RETURN 0
+END
+
+# The receivers are the patch's own names; a float goes to the ones that want a
+# number and a list goes to the two envelope inlets, which want triples.
 ON_CHANGE(pitch, FUNC(v) -> PD_SEND(p, "pitch", v))
-ON_CHANGE(gain,  FUNC(v) -> PD_SEND(p, "gain", v))
-ON_CHANGE(dsp,   FUNC(v) -> PD_DSP(v))
-ON_CHANGE(play,  FUNC(v) -> PD_SEND(p, "gate", v))
-
-# -- the voices page ---------------------------------------------------
-#
-# WORKSPACE("voices") declares the scene and shows it, so every widget built
-# under this comment belongs to it and nothing above moves: the front panel is
-# carried off screen, with its knobs exactly where they were, and comes back on
-# the same numbers when the View menu picks root again.
-WORKSPACE("voices")
-
-# the page is a viewport (docs/widgets.md), so what does not fit the window is
-# reached by wheel, by the thumb or by the page keys rather than drawn past the
-# bottom edge - which is the whole reason a settings page is allowed to be long
-VAR page  = SCROLL("fm parameters")
-VAR deck  = PANEL("")
-VAR notes = PANEL("")
-VAR index = KNOB("Index", 0, 12, 7)
-VAR gate  = KNOB("Level", 0, 1, 1)
-VAR cut   = KNOB("Cutoff", 20, 20000, 2000)
-VAR graph = PLOT("modindex")
-VAR note_index = TEXT("Index - how far the modulator pushes the carrier off pitch")
-VAR note_level = TEXT("Level - where the envelope opens to: Play lifts the gate, this holds it")
-VAR note_cut   = TEXT("Cutoff - a lop~ after the envelope; 20 is mute, 20000 is the voice bare")
-VAR note_view  = TEXT("View switches pages, Sections folds and re-orders the boxes, a band drags into the spare cell")
-
-# three sections, each one a group: a band with a word on it, a body the control
-# lives in, a chevron that closes the body away and - because each says `dockable` -
-# a band a hand can pick the whole box up by and drop into another cell of the grid
-# below. The script never sees the two panels a group is built out of: adding a knob
-# to `carrier` puts it where the contents go, exactly as it does under a viewport,
-# and the box's own height is measured from it rather than written here.
-VAR carrier   = GROUP("carrier", deck)
-VAR modulator = GROUP("modulator", deck)
-VAR filter    = GROUP("filter", deck)
-
-# NODE_ADD is what puts a control *inside* the viewport. PLACE alone only moves a
-# widget, so a knob left as a sibling of the page would be drawn past its bottom
-# edge instead of being part of the content that scrolls; added to the page, the
-# coordinates below measure from the top of the content rather than from the top
-# of the window, and the last line of help is below the fold until a person asks
-# for it.
-# The page is glued to all four edges of the scene it lives in, because the room a
-# scene gives a page is the window's height less the menu bar, and a page placed at
-# a hand-written 388 keeps that band forever: a taller window would show the same
-# 388 with empty panel under it, and a shorter one would cut the page off. The
-# ``PLACE`` below is the same size the glues answer at this window, written so the
-# page has a box before the first pass that resolves it.
-PLACE(page, 0, 0, 640, 388)
-ANCHOR(page, "left")
-ANCHOR(page, "right")
-ANCHOR(page, "top")
-ANCHOR(page, "bottom")
-NODE_ADD(page, deck)
-NODE_ADD(page, graph)
-NODE_ADD(page, notes)
-PLACE(index, 0, 0, 64, 64)
-PLACE(gate, 0, 0, 64, 64)
-PLACE(cut, 0, 0, 64, 64)
-NODE_ADD(modulator, index)
-NODE_ADD(carrier, gate)
-NODE_ADD(filter, cut)
-NODE_ADD(notes, note_index)
-NODE_ADD(notes, note_level)
-NODE_ADD(notes, note_cut)
-NODE_ADD(notes, note_view)
-
-# three dials of one size in three cells of one size, and four lines of help in a
-# column with one gap between them: the x- and y-arithmetic this script used to do
-# in its head is the row's answer now. A row verb places the children it is handed,
-# so the ``PLACE`` lines under one give a size and no position - a cell centres the
-# 64 x 64 box a knob was sized at, and a stack lines the note rows up one after
-# another with the 20 px gap the script asked for between them. (The lines' width
-# is written for the reader rather than used: the column stretches them, which is
-# what "align", "stretch" is the option for.)
-# PAD(..., 0) is part of that and not decoration: cells are measured inside the
-# panel's content box, so a theme's padding would be added inside every one of them
-# and the numbers here would be the page's plus a skin's. And "fill" on the x axis
-# is what makes a row as wide as the room the viewport gives its content rather than
-# as wide as the window this file was written for - the content panel is as wide as
-# that room, so the row's right edge lands where the viewport's own inset begins.
-# The deck is the grid the three sections are drawn in and, marked `dockable`, the
-# panel that offers its cells as somewhere one can be dropped. Two columns for three
-# groups is what makes that true: the cells a grid has are the cells its children
-# need, so three boxes in two columns fill two rows and leave the fourth cell empty -
-# and a row in which every cell is already taken offers a hand nowhere to put a box
-# down. The empty cell is invisible until a band is held, because a grid draws its
-# cells only while a drag is in progress.
-#
-# Each group fills the width of its cell and keeps the height its own body measures:
-# 106 is the band, the skin's two insets and the 64 px knob, which is what a group
-# writes back for itself, and the deck's 230 is two of those rows and the one 18 px
-# gap between them. A fold does not shrink the cell, only the box inside it, and the
-# `align start` below is what keeps a closed section at the top of the room its open
-# self measured rather than floating in the middle of it. `dockable` on the group is
-# what lets a hand pick it up at all, and one `align center` row per body centres the
-# dial in the box the way a cell centred it when the three of them sat in the grid
-# directly.
-PLACE(deck, 24, 8, 580, 230)
-PACK(deck, "fill", "fixed")
-PAD(deck, 0)
-GRID(deck, 2, 18, ["align", "start", "dockable", 1])
-PACK(carrier, "fill", "fixed")
-PACK(modulator, "fill", "fixed")
-PACK(filter, "fill", "fixed")
-SET(carrier, "dockable", 1)
-SET(modulator, "dockable", 1)
-SET(filter, "dockable", 1)
-VSTACK(carrier, 8, ["align", "center"])
-VSTACK(modulator, 8, ["align", "center"])
-VSTACK(filter, 8, ["align", "center"])
-PLACE(graph, 24, 258, 580, 180)
-PACK(graph, "fill", "fixed")
-PLACE(notes, 24, 450, 580, 140)
-PACK(notes, "fill", "fixed")
-PAD(notes, 0)
-PLACE(note_index, 0, 0, 580, 20)
-PLACE(note_level, 0, 0, 580, 20)
-PLACE(note_cut, 0, 0, 580, 20)
-PLACE(note_view, 0, 0, 580, 20)
-VSTACK(notes, 20, ["align", "stretch"])
-
-# a log-scale cutoff (20..20000 Hz) and names pushed above the dials, so a
-# 64-pixel dial still says what it is
-SET(cut, "log", 1)
-SET(index, "label_place", "top")
-SET(gate, "label_place", "top")
-SET(cut, "label_place", "top")
-
+ON_CHANGE(gain, FUNC(v) -> PD_SEND(p, "gain", v))
+ON_CHANGE(cutoff, FUNC(v) -> PD_SEND(p, "cutoff", v))
 ON_CHANGE(index, FUNC(v) -> PD_SEND(p, "index", v))
-ON_CHANGE(gate,  FUNC(v) -> PD_SEND(p, "level", v))
-ON_CHANGE(cut,   FUNC(v) -> PD_SEND(p, "cutoff", v))
+ON_CHANGE(harm, FUNC(v) -> PD_SEND(p, "ratio", v + 1))
+ON_CHANGE(waves, FUNC(v) -> set_voice(v))
+ON_CHANGE(dsp, FUNC(v) -> PD_DSP(v))
+ON_CHANGE(play, FUNC(v) -> refresh())
+ON_CHANGE(level, FUNC(v) -> carrier_env())
+ON_CHANGE(depth, FUNC(v) -> modulator_env())
+ON_CHANGE(span, FUNC(v) -> refresh())
+# an ADSR drag moves one row of the widget, and the change arrives with the name
+# of that row; the envelope is only meaningful as a whole, so either way the
+# script re-sends the whole list
+ON_CHANGE(cadsr, FUNC(v, name) -> carrier_env())
+ON_CHANGE(madsr, FUNC(v, name) -> modulator_env())
 
-# The three rows the Sections menu drives. Folding is written three times rather
-# than looped over `GROUPS(deck)` because a menu row that changes the page it was
-# built on is a row worth being able to read; each call is the same prop a hand on
-# the chevron writes, and the height every box comes out at is measured by the next
-# layout pass - the script never resizes anything here.
+# -- presets ------------------------------------------------------------
+#
+# A preset is a list in the order this file writes it, which is the order the
+# panel reads itself out in below, so ``Save preset`` and ``Load bell`` are the
+# same door: a preset the script saved loads exactly like a shipped one.
+#
+#   0 pitch   1 gain   2 voice   3 harmonic  4 index   5 level
+#   6 depth   7 cutoff 8 span    9-12 carrier a d s r  13-16 modulator a d s r
+FUNC preset_data()
+    VAR d = [GET(pitch, "value"), GET(gain, "value")]
+    APPEND(d, GET(waves, "value"))
+    APPEND(d, GET(harm, "value"))
+    APPEND(d, GET(index, "value"))
+    APPEND(d, GET(level, "value"))
+    APPEND(d, GET(depth, "value"))
+    APPEND(d, GET(cutoff, "value"))
+    APPEND(d, GET(span, "value"))
+    APPEND(d, GET(cadsr, "attack"))
+    APPEND(d, GET(cadsr, "decay"))
+    APPEND(d, GET(cadsr, "sustain"))
+    APPEND(d, GET(cadsr, "release"))
+    APPEND(d, GET(madsr, "attack"))
+    APPEND(d, GET(madsr, "decay"))
+    APPEND(d, GET(madsr, "sustain"))
+    APPEND(d, GET(madsr, "release"))
+    RETURN d
+END
+
+FUNC apply_preset(word)
+    VAR d = PRESET_LOAD(word)
+    SET(pitch, "value", AT(d, 0))
+    SET(gain, "value", AT(d, 1))
+    SET(waves, "value", AT(d, 2))
+    SET(harm, "value", AT(d, 3))
+    SET(index, "value", AT(d, 4))
+    SET(level, "value", AT(d, 5))
+    SET(depth, "value", AT(d, 6))
+    SET(cutoff, "value", AT(d, 7))
+    SET(span, "value", AT(d, 8))
+    SET(cadsr, "attack", AT(d, 9))
+    SET(cadsr, "decay", AT(d, 10))
+    SET(cadsr, "sustain", AT(d, 11))
+    SET(cadsr, "release", AT(d, 12))
+    SET(madsr, "attack", AT(d, 13))
+    SET(madsr, "decay", AT(d, 14))
+    SET(madsr, "sustain", AT(d, 15))
+    SET(madsr, "release", AT(d, 16))
+    LOG("preset: " + word + " - " + STR(LEN(d)) + " value(s)")
+    RETURN word
+END
+
+# -- the sections and the help page, from the menu ----------------------
+#
+# Folding is written three times rather than looped over GROUPS(deck) because a
+# menu row that changes the page it was built on is a row worth being able to
+# read; each call is the same prop a hand on the chevron writes, and the height
+# every box comes out at is measured by the next layout pass.
 FUNC fold_sections()
-    GROUP_FOLD(carrier, 1)
-    GROUP_FOLD(modulator, 1)
-    GROUP_FOLD(filter, 1)
+    GROUP_FOLD(voice, 1)
+    GROUP_FOLD(modifier, 1)
+    GROUP_FOLD(envelopes, 1)
+    RETURN 0
 END
 
 FUNC open_sections()
-    GROUP_FOLD(carrier, 0)
-    GROUP_FOLD(modulator, 0)
-    GROUP_FOLD(filter, 0)
+    GROUP_FOLD(voice, 0)
+    GROUP_FOLD(modifier, 0)
+    GROUP_FOLD(envelopes, 0)
+    RETURN 0
 END
 
-# Every frame the scope reads the last block off the output and the graph reads
-# the table; the status line says playing with the numbers it is playing at, or
-# stopped - the same flat-vs-live difference the scope shows in its trace.
+# Opening the page puts the text at its first line rather than at the last: a log
+# view counts ``scroll`` up from the newest row and the face clamps what it draws,
+# so a scroll of "as many as there are" is the top of the page.
+FUNC open_help()
+    SET(help, "visible", 1)
+    SET(help_page, "scroll", LEN(words))
+    RETURN 1
+END
+
+FUNC close_help()
+    SET(help, "visible", 0)
+    RETURN 0
+END
+
+# -- the frame ----------------------------------------------------------
 #
-# The frame runs whichever page is on screen: the widgets it reads and writes are
-# carried between scenes rather than rebuilt, so the numbers are honest from both.
+# The scope reads the last block off the output and the plot reads the table the
+# carrier is reading, so the graph says what Pd holds rather than what the script
+# asked for; the status line says playing with the numbers it is playing at.
 FUNC frame(dt)
     SET(scope, "data", AUDIO_WAVEFORM(256))
-    SET(graph, "data", PD_ARRAY_READ(p, "modindex"))
-    VAR line = "stopped"
+    SET(graph, "data", PD_ARRAY_READ(p, "carwave"))
+    VAR line = "stopped - press Play/Stop"
     IF GET(play, "value") > 0 THEN
-        VAR line = "playing @ pitch " + STR(GET(pitch, "value"))
+        VAR line = "playing " + wave_word(GET(waves, "value"))
+        VAR line = line + " @ pitch " + STR(GET(pitch, "value"))
+        VAR line = line + ", " + STR(GET(harm, "value") + 1) + "f"
         VAR line = line + ", index " + STR(GET(index, "value"))
+        VAR line = line + ", cutoff " + STR(GET(cutoff, "value"))
         VAR line = line + ", gain " + STR(GET(gain, "value"))
     END
+    IF GET(dsp, "value") == 0 THEN
+        VAR line = "dsp off - " + line
+    END
     SET(log, "lines", [line])
+    RETURN 0
 END
 ON_FRAME(frame)
 
 # The runtime menu, built from ordinary widgets by the reusable MENU_* framework
 # (see docs/widgets.md). Building the bar is widget arithmetic only: it queries
 # no audio or MIDI device until a person opens one of those dialogs. A run with
-# no window still builds it - there is simply nothing to click. That is the whole
-# of what "safe" meant here; the sound itself is never simulated.
+# no window still builds it - there is simply nothing to click.
 VAR bar         = MENUBAR("menu")
 VAR file_menu   = MENU(bar, "File")
 VAR view_menu   = MENU(bar, "View")
 VAR audio_menu  = MENU(bar, "Audio")
 VAR midi_menu   = MENU(bar, "MIDI")
 VAR serial_menu = MENU(bar, "Serial")
+VAR help_menu   = MENU(bar, "Help")
 
-# one row per scene in this window, the current one ticked, picking one shows it -
-# the switch without the script writing a loop over WORKSPACE_NAMES()
-MENU_WORKSPACES(view_menu)
+MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("fm", preset_data()))
+MENU_ADD(file_menu, "Load bell", FUNC() -> apply_preset("bell"))
+MENU_ADD(file_menu, "Load brass", FUNC() -> apply_preset("brass"))
 
-# The sections get a menu of their own rather than rows under the two scenes, and
-# the reason is in `MENU_WORKSPACES`: that binding recomposes its popup from the
-# window's scenes every time it opens, so a row added beside it would be gone the
-# moment a person clicked View. The three "... first" rows are the reorder - the
-# order they change is the order the grid above lays the cells out in - and the
-# checkable row is the `accordion` prop on the panel that holds the groups, which is
-# what makes opening one close the other two. A checkable row is a `toggle` whose
-# value the click latches *before* the script's function runs (docs/widgets.md), and
-# `MENU_CHECK` hands back that row's handle, so the row reads its own tick rather
-# than guessing what state it was clicked into.
-VAR section_menu = MENU(bar, "Sections")
-MENU_ADD(section_menu, "Fold every section", fold_sections)
-MENU_ADD(section_menu, "Open every section", open_sections)
-MENU_ADD(section_menu, "Carrier first", FUNC() -> GROUP_MOVE(carrier, 0))
-MENU_ADD(section_menu, "Modulator first", FUNC() -> GROUP_MOVE(modulator, 0))
-MENU_ADD(section_menu, "Filter first", FUNC() -> GROUP_MOVE(filter, 0))
-VAR one_at_a_time = MENU_CHECK(section_menu, "One at a time", 0, FUNC() -> SET(deck, "accordion", GET(one_at_a_time, "value")))
+# the sections' own rows: the fold, the order, and the `accordion` prop on the
+# panel that holds them, which is what makes opening one close the other two. A
+# checkable row latches its value *before* the script's function runs, so the row
+# reads its own tick rather than guessing what state it was clicked into.
+MENU_ADD(view_menu, "Fold every section", fold_sections)
+MENU_ADD(view_menu, "Open every section", open_sections)
+MENU_ADD(view_menu, "Voice first", FUNC() -> GROUP_MOVE(voice, 0))
+MENU_ADD(view_menu, "Modulator first", FUNC() -> GROUP_MOVE(modifier, 0))
+MENU_ADD(view_menu, "Envelopes first", FUNC() -> GROUP_MOVE(envelopes, 0))
+VAR one_at_a_time = MENU_CHECK(view_menu, "One at a time", 0, FUNC() -> SET(deck, "accordion", GET(one_at_a_time, "value")))
 
-MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("fm", [GET(pitch, "value"), GET(gain, "value"), GET(index, "value")]))
-MENU_ADD(file_menu, "Load bell", FUNC() -> SET(log, "lines", [STR(PRESET_LOAD("bell"))]))
 MENU_ADD(audio_menu, "Unmute", FUNC() -> PD_DSP(1))
 MENU_ADD(audio_menu, "Mute", FUNC() -> PD_DSP(0))
 MENU_AUDIO_DIALOG(audio_menu)
 MENU_MIDI_DIALOG(midi_menu)
 MENU_ADD(serial_menu, "No serial link", FUNC() -> LOG("fm-synth declares no serial port"))
 
-# and the run opens on the front panel, because that is the page with Play on it
-WORKSPACE_SHOW("root")
+# Help is a menu of its own because the page it opens is part of this project's
+# own widgets - the same dialog the Close button and the wheel drive, reached
+# from a row that does nothing but set two props.
+MENU_ADD(help_menu, "Using this synth", open_help)
+MENU_ADD(help_menu, "Close help", close_help)
+
+# and the run opens on the front panel with the shipped bell: the voice table
+# written, both envelopes closed, and every receiver holding what the knobs show
+apply_preset("bell")
+ON_CLICK(help_close, close_help)
+PD_DSP(1)
+LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")

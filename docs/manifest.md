@@ -166,7 +166,7 @@ than crashing the load.
 {
   "images":   ["assets/*.png"],
   "sounds":   ["assets/kick.wav"],
-  "arrays":   [{ "id": "modindex", "file": "assets/modindex.txt",
+  "arrays":   [{ "id": "wave", "file": "assets/wave.txt",
                  "format": "text", "patch": "fm" }],
   "presets":  ["presets/*.json"]
 }

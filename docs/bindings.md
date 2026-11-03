@@ -82,7 +82,7 @@ returns without waiting for a real millisecond.
 `FPS()` reads the loop's own target; `TIME()` is the clock's seconds;
 `EXIT(code)` raises an `ExitRequest` the loop catches on the way out.
 `RES(id)` looks a declared resource up in the project's resource table
-(`GET(RES("modindex"), "values")` is how `fm_synth` reads its array), and
+(`GET(RES("sqr"), "values")` is how `fm_synth` reads one of its arrays), and
 `PRESET_LOAD(name)`/`PRESET_SAVE(name, values)` are the two halves of a
 preset file. `WIDTH(w)`/`HEIGHT(w)` read a widget's - or the painter's own canvas's -
 box, the number a script scales to without a hard-coded constant. `RUN(fn)`
