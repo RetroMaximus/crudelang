@@ -34,9 +34,9 @@ from crude.lang import Program
 from crude.ui import (RecordingRenderer, Skin, UIContext, Widget, face_for, pad,
                       reset)
 from crude.ui.props import PropError
-from crude.ui.scroll import (BAR_WIDTH, MIN_THUMB, content_of, measure,
-                              reconcile, restack, rows_in, slide, thumb_rect,
-                              top, travel_of, view_of)
+from crude.ui.scroll import (BAR_WIDTH, MIN_THUMB, content_of, fit_content,
+                              measure, reconcile, restack, rows_in, slide,
+                              thumb_rect, top, travel_of, view_of)
 
 #: the viewport every test in here is built on, and the row it slides
 VIEW_ACROSS, VIEW_DOWN = 200.0, 100.0
@@ -160,6 +160,28 @@ def test_reconcile_answers_the_two_rows_the_layout_pass_reports(root):
     # the content panel got the height its rows ask for and the width the view gives
     inner = held.content_child
     assert (inner.width, inner.height) == (VIEW_ACROSS, 220.0)
+
+
+def test_the_views_width_is_taken_up_before_the_rows_are_arranged(root):
+    """``fit_content`` is the half of the settle that cannot wait for the rows.
+
+    A row packed ``fill`` is sized against the content panel's own box, so a panel
+    whose width is only written *after* the arrangement leaves every row one window
+    behind - which is the frame a resize would otherwise have to spend twice.
+    """
+    held = viewport(root, rows=3)
+    inner = held.content_child
+    assert inner.width == VIEW_ACROSS
+
+    held.place(0, 0, 120, VIEW_DOWN)                      # the window narrowed
+    assert inner.width == VIEW_ACROSS, "nobody has asked the question yet"
+    assert fit_content(held) == 1
+    assert inner.width == 120.0
+    assert fit_content(held) == 0, "an idle frame writes nothing, so it counts zero"
+    # the height is still the rows' answer, and this pass does not touch it
+    assert inner.height != 120.0
+    # and a box that is not a viewport has nothing to be asked
+    assert fit_content(Widget("panel", name="box")) == 0
 
 
 def test_the_two_measured_rows_are_not_a_scripts_to_write(root):

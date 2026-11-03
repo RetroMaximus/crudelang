@@ -37,12 +37,13 @@ on directly.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .base import UIError
 from .geometry import Rect, snap, snap_box
+from .grid import GridSpec, record as record_grid
+from .scroll import fit_content
 from .skin import Skin
 from .widget import Widget
 
@@ -734,7 +735,9 @@ def resolve(root: Any, skin: Any, *, width: Any = None,
     1. **padding** - a stack's ``pad`` token is measured against ``skin`` and
        written, then :meth:`~crude.ui.widget.Widget.sync` turns every padding into
        a content box, an origin and a clip. Nothing below can be counted until the
-       lengths it divides are known.
+       lengths it divides are known. A viewport's content panel is then given the
+       width of the view this frame settled, because that half of its box is a fact
+       about the viewport rather than about the rows inside it.
     2. **pack and stacks** - parents before children, because a child's size is a
        fraction of the space its parent has. Every box is written in the parent's
        own space, so no absolute number is needed and a moved subtree re-resolves
@@ -757,6 +760,7 @@ def resolve(root: Any, skin: Any, *, width: Any = None,
     for held in found.walk():
         _note_pad(held, skin)
     found.sync(skin, dpr=dpr)
+    moved += _content_pass(found)
     moved += _box_pass(found, skin)
     moved += _anchor_pass(found)
     return moved
@@ -770,17 +774,39 @@ def _note_pad(held: Widget, skin: Any) -> None:
     policy.pad = metric(skin, policy.stack.pad)
 
 
+def _content_pass(root: Widget) -> int:
+    """Sweep 1b: a viewport's content is as wide as the room this frame gives it.
+
+    Half of :func:`~crude.ui.scroll.reconcile`, run before the boxes are counted
+    rather than after them. How tall a viewport's content is can only be measured
+    once its rows have been arranged inside it, so that half stays where it is; how
+    *wide* it is is settled by the viewport's own content box, which sweep 1 has just
+    produced. Asking the question here is what lets a row packed ``fill`` be sized
+    against this frame's view rather than the last one's, so a resized window needs
+    one pass rather than two.
+    """
+    moved = 0
+    for held in root.walk():
+        moved += fit_content(held)
+    return moved
+
+
 def _box_pass(panel: Widget, skin: Any) -> int:
     """Sweep 2, one container at a time: sizes first, then the children's own."""
     moved = 0
     kids = panel.children
+    policy = panel.layout
     if not kids:
+        # a panel holding nothing has no cells, and saying so is the point: the
+        # rows a face and a drop read have to describe this pass rather than the
+        # shape some earlier stack left behind
+        record_grid(panel, None)
         return 0
     inner = panel.content_box()
-    policy = panel.layout
     if policy is not None and policy.stacked:
         moved += _arrange(panel, policy.stack, inner, skin)
     else:
+        record_grid(panel, None)
         for kid in kids:
             moved += _fit(kid, inner)
     for kid in kids:
@@ -844,7 +870,7 @@ def _arrange(panel: Widget, spec: Stack, inner: Rect, skin: Any) -> int:
     """Sweep 2, arranged: a row, a column or a grid of cells."""
     kids = panel.children
     if spec.is_grid:
-        return _arrange_grid(kids, spec, inner, skin)
+        return _arrange_grid(panel, kids, spec, inner, skin)
     gap = metric(skin, spec.gap)
     flat = spec.direction == "horizontal"
     main = "x" if flat else "y"
@@ -893,24 +919,30 @@ def _arrange(panel: Widget, spec: Stack, inner: Rect, skin: Any) -> int:
     return moved
 
 
-def _arrange_grid(kids: Sequence[Widget], spec: Stack, inner: Rect,
-                  skin: Any) -> int:
-    """Sweep 2, in cells: every child gets a box of the same shape."""
-    total = len(kids)
-    gap = metric(skin, spec.gap)
-    columns = spec.columns or int(math.ceil(math.sqrt(total)))
-    columns = max(1, min(columns, total))
-    rows = int(math.ceil(total / float(columns)))
-    cell_w = max(0.0, (inner[2] - gap * (columns - 1)) / columns)
-    cell_h = max(0.0, (inner[3] - gap * (rows - 1)) / rows)
+def _arrange_grid(panel: Widget, kids: Sequence[Widget], spec: Stack,
+                  inner: Rect, skin: Any) -> int:
+    """Sweep 2, in cells: every child gets a box of the same shape.
+
+    The cells are :class:`~crude.ui.grid.GridSpec`'s to define rather than this
+    function's: a group dropped into a cell has to land on exactly the rectangle
+    arranged here, and the only way two callers cannot disagree is for there to be
+    one formula. The gap is measured here, because a ``"pad.md"`` means whatever
+    this frame's skin says it means and a spec is handed pixels for that reason.
+
+    The box tiled is the content box with its origin taken off, since every number
+    :func:`_write` hands on is relative to that origin - which is the same box a
+    face outlines in screen pixels and a gesture reads a pointer out of.
+    """
+    grid = GridSpec.of(len(kids), spec.columns, metric(skin, spec.gap))
+    record_grid(panel, grid)
+    box = (0.0, 0.0, inner[2], inner[3])
     moved = 0
     for index, kid in enumerate(kids):
         policy = kid.layout
+        left, top, cell_w, cell_h = grid.rect_of(index, box)
         x, width = _cell(policy, kid.width, cell_w, "x", spec.align)
         y, height = _cell(policy, kid.height, cell_h, "y", spec.align)
-        moved += _write(kid, *_arranged(kid, policy,
-                                        (index % columns) * (cell_w + gap) + x,
-                                        (index // columns) * (cell_h + gap) + y,
+        moved += _write(kid, *_arranged(kid, policy, left + x, top + y,
                                         width, height), policy)
     return moved
 

@@ -79,7 +79,26 @@ from ..ui import (
     prop_names,
     registered_names,
 )
+# the placement pass, imported under its own names so the verbs below can be called
+# ``PACK``, ``PAD`` and ``GRID``. Each binding is one call into
+# :mod:`crude.ui.layout`: no geometry is worked out in this module, which is the
+# plan's rule for this stage - the engine already existed and nothing in a script
+# could reach it.
+from ..ui import (
+    anchor as layout_anchor,
+    anchors_of as layout_anchors,
+    arrange as layout_arrange,
+    grid as layout_grid,
+    hstack as layout_hstack,
+    pack as layout_pack,
+    pack_of as layout_pack_of,
+    pad as layout_pad,
+    unanchor as layout_unanchor,
+    unstack as layout_unstack,
+    vstack as layout_vstack,
+)
 from .core import own_props
+from .handles import values_from
 from .registry import Binding, REGISTRY, binding
 
 AREA = "ui"
@@ -133,6 +152,23 @@ CONSTRUCTORS["TOGGLE"] = ("toggle", ("label", "on"), 1)
 #  :mod:`crude.ui.props` settles a bool prop with
 _ON_WORDS = ("true", "yes", "on", "1")
 _OFF_WORDS = ("false", "no", "off", "0")
+
+#: the two words ``GET`` answers for every widget out of the placement pass rather
+#  than out of a kind's prop table: ``place`` is the list of glues the widget
+#  carries, each one the sentence ``ANCHOR`` was given, and ``pack`` its two resize
+#  policies. They are not rows - a widget's anchors are rules, not a value, and a
+#  flat table cannot say "a list of these, of a type the table has no word for" -
+#  so they are read here, refused by ``SET`` here, and ``WIDGET_HAS`` answers them
+#  the way ``GET`` does rather than pretending they do not exist.
+LAYOUT_WORDS = ("place", "pack")
+
+#: the option names the arrange verbs take after their own arguments, as a flat
+#  ``"name", value`` list - the shape ``PD_GUI``'s ``props`` already uses, because
+#  a stack has four words left and nobody can guess a positional slot for each.
+#  ``dockable`` belongs to a grid alone: it is the offer of a cell to drop into, and
+#  a row or a column has nothing to drop into.
+STACK_OPTIONS = ("gap", "pad", "align")
+GRID_OPTIONS = ("gap", "pad", "align", "dockable")
 
 
 # -- helpers ------------------------------------------------------------
@@ -426,9 +462,29 @@ def _repaint(ctx, owner) -> None:
 
 
 def _widget_get(ctx, handle, prop):
-    """One readable prop, wrapped for the script; a bad name says which kind."""
+    """One readable prop, wrapped for the script; a bad name says which kind.
+
+    The two :data:`LAYOUT_WORDS` are answered first, from the placement pass, which
+    is the only place a widget's glues and policies are kept - a script asks
+    ``GET(w, "place")`` the same way it asks ``GET(w, "value")`` and gets the same
+    kind of answer back, a list of what the widget was told.
+    """
+    held = handle.target
+    said = str(prop).strip().lower()
+    if said in LAYOUT_WORDS:
+        return _layout_read(held, said)
     try:
-        return python_to_value(handle.target.get(prop))
+        return python_to_value(held.get(prop))
+    except UIError as exc:
+        raise ctx.fail(f"GET: {exc}")
+
+
+def _layout_read(held, word: str):
+    """``GET(w,"place")`` / ``GET(w,"pack")``, read off the pass that owns them."""
+    try:
+        if word == "place":
+            return List([String(str(rule)) for rule in layout_anchors(held)])
+        return List([String(name) for name in layout_pack_of(held)])
     except UIError as exc:
         raise ctx.fail(f"GET: {exc}")
 
@@ -439,7 +495,19 @@ def _widget_set(ctx, handle, prop, value):
     Returning what the widget ended up holding is what keeps a clamp honest: a
     ``SET(w, "value", 500)`` on a slider that tops out at 300 hands back 300
     rather than the number the script asked for and the widget refuses.
+
+    The two :data:`LAYOUT_WORDS` are refused by name and sent to the verb that
+    writes them, because they are not rows: a gluing is a rule the pass keeps, and
+    the table has no word for one, so a ``SET`` here would be a script editing a
+    layout it cannot see.
     """
+    said = str(prop).strip().lower()
+    if said == "place":
+        raise ctx.fail("SET: 'place' is what a widget is glued to, and only "
+                       "ANCHOR() and UNANCHOR() write gluing")
+    if said == "pack":
+        raise ctx.fail("SET: 'pack' is what a widget does when its container "
+                       "moves, and only PACK() writes that")
     try:
         handle.target.set(prop, value_to_python(value))
     except UIError as exc:
@@ -478,6 +546,229 @@ def node_add(ctx):
     except UIError as exc:
         _fail(ctx, exc)
     return _handle(child)
+
+
+# -- place: the rest of the placement pass ------------------------------
+
+
+def _option_map(ctx, allowed) -> dict:
+    """The ``options`` argument as the map :func:`crude.ui.layout.arrange` reads.
+
+    An alternating list of a name and a value, refused when the last name has no
+    value and refused *by name* when it is not a word this verb knows. The refusal
+    is the point: ``arrange`` drops a key it does not recognise, and a layout option
+    that was silently thrown away is a panel that came out different from the one the
+    script asked for, which is the kind of mistake nobody finds by looking.
+    """
+    given = values_from(ctx, "options")
+    if len(given) % 2:
+        raise ctx.fail(
+            f"{ctx.name}: 'options' is a list of name/value pairs and this one "
+            f"has {len(given)} item(s), which leaves one without a name")
+    held = {}
+    for index in range(0, len(given), 2):
+        key = given[index]
+        if not isinstance(key, str):
+            raise ctx.fail(f"{ctx.name}: an 'options' name must be a string, and "
+                           f"position {index} holds {key!r}")
+        said = key.strip().lower()
+        if said not in allowed:
+            raise ctx.fail(f"{ctx.name}: '{said}' is not an option it knows "
+                           f"(known: {', '.join(allowed)})")
+        held[said] = given[index + 1]
+    return held
+
+
+def _column_count(ctx) -> int:
+    """The ``columns`` a ``GRID`` was given, as whole cells or as a named refusal.
+
+    :func:`crude.ui.layout.stack` truncates, and a script that wrote ``GRID(box, 2.5)``
+    asked for a division somebody else decided, which is why
+    :class:`~crude.ui.grid.GridSpec` refuses a fractional count instead of rounding it
+    into a cell the pass does not measure. ``0`` stays legal and means "as many as make
+    the grid square", because that is what the verb's own docstring says it means.
+    """
+    if not ctx.has("columns"):
+        return 0
+    said = ctx.as_number("columns")
+    if said != int(said):
+        raise ctx.fail(f"{ctx.name}: 'columns' counts cells, so it has to be a "
+                       f"whole number, not {said:g}")
+    if said < 0:
+        raise ctx.fail(f"{ctx.name}: 'columns' of {said:g} is not a number of "
+                       "cells; 0 means as many as fit the children there are")
+    return int(said)
+
+
+def _arranged(ctx, direction: str) -> HostHandle:
+    """One arrange call: this panel, its gap, and whatever the option list said.
+
+    The same helper behind ``HSTACK``, ``VSTACK`` and ``GRID``, which differ only in
+    the direction they hand the pass and in whether a column count is read: the last
+    word written wins, so an option named in the list beats the positional argument
+    that answered the same question first.
+    """
+    panel = _as_widget(ctx, "panel")
+    spec = {"direction": direction}
+    if direction == "grid":
+        spec["columns"] = _column_count(ctx)
+    if ctx.has("gap"):
+        spec["gap"] = _optional_value(ctx, "gap")
+    allowed = GRID_OPTIONS if direction == "grid" else STACK_OPTIONS
+    options = _option_map(ctx, allowed)
+    dockable = options.pop("dockable", None)
+    spec.update(options)
+    try:
+        layout_arrange(panel, spec)
+        if dockable is not None:
+            panel.set("dockable", dockable)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return _handle(panel)
+
+
+@binding("ANCHOR", ["widget", "edge", "target", "target_edge", "offset"],
+         area=AREA, optional=3,
+         doc="Glue one edge of a widget to one edge of another, or of its panel.")
+def anchor(ctx):
+    """``ANCHOR(w, "right", bar, "right", -16)``: the glue owns that axis from now on.
+
+    Two arguments are the whole engine's own rule: with no ``target`` the widget is
+    glued to the panel it lives in (and ``"parent"`` says so in words), and with no
+    ``target_edge`` the same edge is used on both sides. Gluing ``left`` and
+    ``right`` is a stretch rather than a contradiction, which is how a bar pinned
+    to both window edges survives a resize; an anchor is applied after every pack
+    and stack, so the axis it names stops being theirs to decide.
+
+    Answers the glue as the sentence ``GET(w, "place")`` reads it back.
+    """
+    held = _as_widget(ctx, "widget")
+    edge = ctx.as_string("edge")
+    target = _optional_value(ctx, "target")
+    target_edge = _optional_value(ctx, "target_edge")
+    offset = _optional_value(ctx, "offset", 0.0)
+    try:
+        rule = layout_anchor(held, edge, target, target_edge, offset)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return String(str(rule))
+
+
+@binding("UNANCHOR", ["widget", "edge"], area=AREA, optional=1,
+         doc="Take one glue away, or every one; how many left.")
+def unanchor(ctx):
+    """``UNANCHOR(w)`` / ``UNANCHOR(w, "bottom")``: the axis goes back to pack.
+
+    The widget keeps the box the glue last wrote rather than being placed again by
+    hand, which is the same honesty the pass itself has: taking a rule away is not
+    the same act as never having had one.
+    """
+    held = _as_widget(ctx, "widget")
+    edge = ctx.as_string("edge") if ctx.has("edge") else None
+    try:
+        gone = layout_unanchor(held, edge)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(float(gone))
+
+
+@binding("PACK", ["widget", "policy_x", "policy_y"], area=AREA, optional=1,
+         doc="What a widget does when its container moves: fixed, grow or fill.")
+def pack(ctx):
+    """``PACK(w, "grow", "fixed")``: one word for both axes, or one for each.
+
+    ``fixed`` keeps the size the script gave it, ``grow`` keeps the *fraction* of the
+    container that size was, and ``fill`` takes the space nothing else used. An axis
+    a script has glued is not a pack answer any more, whatever is stored here.
+
+    Answers the two policies now held, which is what ``GET(w, "pack")`` reads back.
+    """
+    held = _as_widget(ctx, "widget")
+    policy = ctx.as_string("policy_x")
+    other = _optional_value(ctx, "policy_y")
+    try:
+        found = layout_pack(held, policy, other)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return List([String(found[0]), String(found[1])])
+
+
+@binding("PAD", ["widget", "value"], area=AREA, optional=1,
+         doc="A container's own padding, in pixels or a metric token; none gives back.")
+def pad(ctx):
+    """``PAD(box, 16)`` / ``PAD(box, "lg")`` / ``PAD(box)``: the pixels it landed on.
+
+    A number of logical pixels overrides the skin's padding for this widget, which
+    moves where children are placed, what they are clipped to, and where a hit on
+    the inner edge stops counting as the panel. A token name is measured against the
+    skin this tree was last resolved with, so the first layout has to have run -
+    which is said rather than guessed at. Leaving the value out gives the skin's own
+    answer back and returns ``0``.
+    """
+    held = _as_widget(ctx, "widget")
+    value = _optional_value(ctx, "value")
+    try:
+        found = layout_pad(held, value)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(found)
+
+
+@binding("HSTACK", ["panel", "gap", "options"], area=AREA, optional=2,
+         doc="Arrange a panel's children left to right; gap, then pad/align options.")
+def hstack(ctx):
+    """``HSTACK(box, 8)``: a row, laid out in the order the children were added.
+
+    Children are arranged in z-order, so an arrangement and a stack are the same
+    list read two ways - the one a script can reorder by adding, removing or raising
+    a child. The ``gap`` is pixels or a metric token, and the option list holds what
+    is left of a stack's words, "pad" and "align", which are the same two
+    :func:`GRID` takes.
+    """
+    return _arranged(ctx, "horizontal")
+
+
+@binding("VSTACK", ["panel", "gap", "options"], area=AREA, optional=2,
+         doc="Arrange a panel's children top to bottom; gap, then pad/align options.")
+def vstack(ctx):
+    """``VSTACK(box, "pad.sm")``: a column, and the same rules as ``HSTACK``."""
+    return _arranged(ctx, "vertical")
+
+
+@binding("GRID", ["panel", "columns", "gap", "options"], area=AREA, optional=3,
+         doc="Arrange a panel's children in cells; 0 columns is as square as they.")
+def grid(ctx):
+    """``GRID(box, 3, "pad.md")``: equal cells, left to right then top to bottom.
+
+    ``columns`` of ``0`` means as square as the child count allows, and a cell is
+    the panel's length divided by the columns with the gaps taken out, so nine icons
+    in a 200 px panel are nine equal cells rather than nine widths. A child whose
+    policy is ``fill`` takes its whole cell; anything else sits inside it at the
+    ``align`` option, which a grid defaults to ``"center"``.
+
+    ``"dockable", 1`` in the option list writes the panel's own row, which is what
+    makes a cell somewhere a group can be dropped into in stage 4: the cells a
+    ``GRID`` arranges and the cells a drop reads are measured by the same
+    :class:`~crude.ui.grid.GridSpec`, so the two halves cannot disagree.
+    """
+    return _arranged(ctx, "grid")
+
+
+@binding("UNSTACK", ["panel"], area=AREA,
+         doc="Stop arranging a panel; its children stay where the pass left them.")
+def unstack(ctx):
+    """``UNSTACK(box)``: 1 if a stack was taken away, 0 if there was none.
+
+    The children keep the boxes the last pass wrote, because a script that undoes an
+    arrangement has not said where they should be instead, and inventing a place
+    would be the layout layer overruling the script.
+    """
+    held = _as_widget(ctx, "panel")
+    try:
+        gone = layout_unstack(held)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(1 if gone else 0)
 
 
 # -- wire: links --------------------------------------------------------
@@ -933,9 +1224,17 @@ def widget_props(ctx):
 @binding("WIDGET_HAS", ["widget", "prop"], area=AREA,
          doc="Whether a kind holds a prop, so a handler can ask before a SET.")
 def widget_has(ctx):
-    """``WIDGET_HAS(w, "value")``: 1 or 0, so a generic handler can branch."""
+    """``WIDGET_HAS(w, "value")``: 1 or 0, so a generic handler can branch.
+
+    The two :data:`LAYOUT_WORDS` answer 1 for every widget, because ``GET`` does
+    answer them for every widget: a script that was told a kind "has no 'place'" and
+    then watched ``GET(w, "place")`` return its glues would have been lied to about
+    the one question the word is asked for.
+    """
     held = _as_widget(ctx, "widget")
     prop = ctx.as_string("prop")
+    if prop.strip().lower() in LAYOUT_WORDS:
+        return Number(1)
     return Number(1 if prop_exists(held, prop) else 0)
 
 
@@ -1081,13 +1380,17 @@ def workspace_keep(ctx):
 # -- the names this module registers ------------------------------------
 
 #: Every ``ui`` binding, in the order a report should read them: create,
-#  configure (the ``SET``/``GET`` this module owns through ``core``), place, wire,
+#  configure (the ``SET``/``GET`` this module owns through ``core``), place - the
+#  box, then the pass's own verbs for gluing, resizing and arranging - wire,
 #  style, introspect. ``SET``/``GET`` belong to :mod:`crude.bindings.core` and so
-#  are not listed here even though this module makes them mean widgets.
+#  are not listed here even though this module makes them mean widgets, and makes
+#  them answer ``place`` and ``pack`` out of the layout pass as well.
 BINDINGS = (
     "WIDGET", *CONSTRUCTORS,
     "WIDGET_DEFINE", "PROP_DEFINE",
     "PLACE", "NODE_ADD",
+    "ANCHOR", "UNANCHOR", "PACK", "PAD",
+    "HSTACK", "VSTACK", "GRID", "UNSTACK",
     "LINK_VALUE", "LINK_STATE", "UNLINK",
     *(f"ON_{event.upper()}" for event in WIDGET_EVENTS),
     *(f"ON_{event.upper()}" for event in SCRIPT_EVENTS),

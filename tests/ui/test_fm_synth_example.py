@@ -20,6 +20,12 @@ carries the FM parameters, and there is a ``View`` menu of the two names - plus
 the parts of stage 1 that only show up once a script puts a scroll area on a page
 of its own: travel that is real, a wheel that reaches it, and numbers that survive
 a switch.
+
+The layout verbs are asserted here rather than only in their own file, because the
+question this example answers is whether a script can build a page out of them:
+grids and stacks that place the knobs and the help lines, ``fill`` rows that are as
+wide as the viewport, glues that carry the scope and the status line through a
+resize, and ``GET`` reading every one of those decisions back.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from crude.project import LoadOptions, Project, ResourceTable, load_manifest
 from crude.runtime import FakeClock, Runtime
 from crude.ui import ROOT_WORKSPACE, RecordingRenderer, UIContext, Widget
 from crude.ui.menu import BAR_HEIGHT, Menu, MenuBar
-from crude.ui.scroll import view_of
+from crude.ui.scroll import view_of, view_width
 
 #: the repository root, whatever directory pytest was started in
 ROOT = Path(__file__).resolve().parents[2]
@@ -238,14 +244,18 @@ def test_the_voices_page_is_a_scene_of_its_own_with_the_fm_parameters_on_it(stag
     assert page.parent is panel
     assert page.kind.name == "scroll"
     assert page.workspace == VOICES
-    # every knob went into the viewport's own content panel, not alongside it, and
-    # in the order the script added them - which is the order the wheel moves through
-    inside = [widget(stage.say(word)) for word in
-              ("index", "gate", "cut", "graph", "note_index", "note_level",
-               "note_cut", "note_view")]
-    assert all(control.parent is page.content_child for control in inside)
-    assert page.content_child.children == inside, \
+    # what went *inside* the viewport is three blocks - a row of dials, the graph
+    # and a column of notes - each holding its own children, because a NODE_ADD
+    # under a scroll is routed to the content panel rather than landing beside it
+    blocks = [widget(stage.say(word)) for word in ("dials", "graph", "notes")]
+    assert all(block.parent is page.content_child for block in blocks)
+    assert page.content_child.children == blocks, \
         "the shipped NODE_ADD order is the content order"
+    assert blocks[0].children == [widget(stage.say(word)) for word in
+                                  ("index", "gate", "cut")]
+    assert blocks[2].children == [widget(stage.say(word)) for word in
+                                  ("note_index", "note_level", "note_cut",
+                                   "note_view")]
     # the front panel left, and left as a carry: the same objects, off the tree
     assert widget(stage.say("play")).parent is None
 
@@ -289,6 +299,108 @@ def test_a_scene_glued_below_the_bar_fills_the_window_at_two_sizes(stage):
     stage.ui.set_size(900, 700)
     stage.ui.layout()
     assert panel.screen_box == pytest.approx(room())
+
+
+# -- the layout verbs the example runs ----------------------------------
+
+
+def test_the_row_of_dials_is_a_grid_the_script_named_and_the_engine_solved(stage):
+    """Three knobs, three cells: the script gave sizes, ``GRID`` gave positions."""
+    show(stage, VOICES)
+    dials = widget(stage.say("dials"))
+    knobs = [widget(stage.say(word)) for word in ("index", "gate", "cut")]
+
+    assert [float(dials.get(word)) for word in
+            ("grid_columns", "grid_rows", "grid_gap")] == [3.0, 1.0, 18.0]
+    assert all(knob.width == 64.0 and knob.height == 64.0 for knob in knobs), \
+        "the size a script placed is the size its cell holds"
+    # one row of three equal cells across the row's own width, each knob centred in
+    # its cell - the x-arithmetic the script used to write by hand
+    left, _top, width, _height = dials.screen_box
+    cell = (width - 2 * 18.0) / 3.0
+    for slot, knob in enumerate(knobs):
+        assert knob.screen_box[0] == pytest.approx(
+            left + slot * (cell + 18.0) + (cell - knob.width) / 2.0, abs=1.0)
+        assert knob.parent is dials
+
+
+def test_the_note_lines_are_one_column_with_one_gap(stage):
+    """``VSTACK(notes, 20, ["align", "stretch"])``: a stride, and lines as wide as
+    the column instead of centred at the width each one was placed at."""
+    show(stage, VOICES)
+    notes = widget(stage.say("notes"))
+    lines = [widget(stage.say(word)) for word in
+             ("note_index", "note_level", "note_cut", "note_view")]
+
+    assert notes.children == lines
+    left, top, width, _height = notes.screen_box
+    for slot, line in enumerate(lines):
+        assert line.parent is notes
+        assert line.height == 20.0
+        assert line.screen_box[0] == pytest.approx(left)
+        assert line.width == pytest.approx(width)
+        assert line.screen_box[1] == pytest.approx(top + slot * 40.0)
+
+
+def test_a_row_that_fills_is_as_wide_as_the_room_the_viewport_gives(stage):
+    """``PACK(block, "fill", "fixed")`` is measured against the content panel, which
+    is the width the viewport hands it - not against the window this file names."""
+    show(stage, VOICES)
+    page = widget(stage.say("page"))
+    blocks = [widget(stage.say(word)) for word in ("dials", "graph", "notes")]
+
+    for block in blocks:
+        assert block.width == pytest.approx(view_width(page) - 24.0)
+
+    stage.ui.set_size(900, 700)
+    stage.ui.layout()
+    # the pass's own order, which the plan fixes: the page is glued, so its new box
+    # is written by the anchor sweep that runs after the rows were arranged inside
+    # it, and the rows catch up on the next frame - the one a live window is drawing
+    # anyway, sixteen milliseconds later and never seen
+    stage.ui.layout()
+    for block in blocks:
+        assert block.width == pytest.approx(view_width(page) - 24.0)
+        assert block.screen_box[0] + block.width <= \
+            page.content_box()[0] + view_width(page), "the row stops in the frame"
+
+
+def test_what_a_layout_verb_wrote_GET_reads_back(stage):
+    """The verbs are facts about the tree, not one-way calls: every decision this
+    script made is readable off the widget it was made about."""
+    assert stage.say('GET(gain, "pack")') == ["grow", "fixed"]
+    assert stage.say('GET(scope, "place")') == [
+        "left -> parent.left +336", "right -> parent.right -24"]
+    assert stage.say('GET(log, "place")') == [
+        "left -> parent.left", "right -> parent.right", "bottom -> parent.bottom"]
+    show(stage, VOICES)
+    assert stage.say('GET(notes, "place")') == [], "a stack is not a glue"
+    assert float(stage.say('GET(dials, "grid_columns")')) == 3.0
+
+
+def test_the_scope_and_the_status_line_follow_the_window(stage):
+    """The regression the glues are the answer to: numbers that only fitted the
+    640 x 420 window this script was written in, and the same page at 900 x 700."""
+    scope = widget(stage.say("scope"))
+    log = widget(stage.say("log"))
+    gain = widget(stage.say("gain"))
+
+    stage.ui.layout()
+    assert scope.screen_box == pytest.approx((336, 52, 280, 150))
+    assert log.screen_box == pytest.approx((0, 390, 640, 30))
+    # the line is the page's width and inside the page it is glued to, rather than
+    # running past the bottom edge the way a hand-written y would have
+    assert log.width == pytest.approx(stage.ui.root.content_box()[2])
+    assert log.screen_box[1] + log.height <= stage.ui.root.content_box()[3]
+
+    stage.ui.set_size(900, 700)
+    stage.ui.layout()
+    # the right glue buys the scope the 260 px a placed 280 would have left over
+    assert scope.screen_box == pytest.approx((336, 52, 540, 150))
+    assert log.screen_box == pytest.approx((0, 670, 900, 30))
+    # and ``grow`` is the same answer on one more control: 150 px of a 640 px page
+    # is 211 px of a 900 px one, so the throw keeps its resolution
+    assert gain.width == pytest.approx(150.0 * 900.0 / 640.0, abs=1.0)
 
 
 # -- what a switch keeps ------------------------------------------------

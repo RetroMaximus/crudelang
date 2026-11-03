@@ -452,15 +452,22 @@ class Widget:
         return {name: held.value for name, held in self._state.items()}
 
     def writable(self) -> Dict[str, Any]:
-        """The map a script's ``GET``/``SET`` pair sees: every row but the pointer's.
+        """The map a script's ``GET``/``SET`` pair sees: every row a ``SET`` answers.
 
-        The four state rows are still readable through :meth:`get` - a script may
-        ask whether its widget is hovered - but a ``SET`` on them is refused by the
-        table, so this is the honest answer to "what can I write on this widget"
-        and the thing a preset serialiser wants.
+        Read from each row's own :attr:`~crude.ui.props.Prop.readonly` rather than
+        from a list of names, because there are two owners of a closed row and the
+        list only knew one of them: the pointer's four state rows, and the numbers a
+        layout pass measures - a viewport's ``content`` and ``travel``, a panel's
+        cells. All of them stay readable through :meth:`get` - a script may ask
+        whether its widget is hovered, or how far its page can still slide - but a
+        ``SET`` on any of them is refused by the table, so this is the honest answer
+        to "what can I write on this widget" and the thing a preset serialiser
+        wants: saving a measurement would hand it back as an edit nobody made.
         """
+        closed = {name for name, prop in self.kind.props.items()
+                  if prop.readonly}
         return {name: held.value for name, held in self._state.items()
-                if name not in POINTER}
+                if name not in closed}
 
     def take_changes(self) -> List[str]:
         """The props written since last time, in order, and an emptied list.

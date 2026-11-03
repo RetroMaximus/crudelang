@@ -44,15 +44,18 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
 #: the kinds that own a face: every one of them draws a picture inside the plate,
 #  from the eight synth displays and canvases to the ranges, the meter, the radio's
 #  cells and the dial - while ``vslider`` and ``preset_bar`` are proved below to
-#  reach a face through the chain instead of by owning one. ``scroll`` is the last
-#  and the odd one out: its plate is the panel it is built on and the only mark it
-#  adds is the thumb, which is a picture inside the plate all the same
+#  reach a face through the chain instead of by owning one. ``scroll`` is the odd
+#  one out among the controls: its plate is the panel it is built on and the only
+#  mark it adds is the thumb, which is a picture inside the plate all the same.
+#  ``panel`` is the odd one out among the containers: its face adds a label, which
+#  is what a bare plate already drew, and outlines cells only while a drag is
+#  looking for one - so an ordinary panel is still painted by the plate alone
 DISPLAY = ("waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
-           "keybed", "slider", "meter", "radio", "knob", "scroll")
+           "keybed", "slider", "meter", "radio", "knob", "scroll", "panel")
 
 #: the kinds a bare plate and a word still describe: nothing here draws inside
-#  the plate, because a toggle is the plate and a panel is where the others sit
-NO_FACE = ("panel", "text", "icon", "button", "toggle", "dropdown")
+#  the plate, because a toggle is the plate
+NO_FACE = ("text", "icon", "button", "toggle", "dropdown")
 
 
 @pytest.fixture(autouse=True)

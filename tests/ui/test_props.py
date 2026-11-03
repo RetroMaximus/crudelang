@@ -1035,7 +1035,9 @@ def test_dumping_one_kind_and_the_whole_table_are_two_different_questions(bpm):
 def test_a_kind_and_a_prop_can_say_what_they_are_when_a_log_needs_to_say_it(bpm):
     assert str(bpm) == ("Kind(bpm_slider, 30 props, from slider, "
                         "emits [hslider], defined by script)")
-    assert str(get_kind("panel")) == "Kind(panel, 22 props, emits [cnv])"
+    # the five grid rows are in a panel's count: three the layout pass measures,
+    # ``dockable`` the script writes, ``docking`` the frame writes
+    assert str(get_kind("panel")) == "Kind(panel, 27 props, emits [cnv])"
     assert repr(get_kind("slider")) == "<Kind slider>"
     assert str(get_kind("slider").get("size")).startswith(
         "slider.size: string = 'md'")

@@ -222,10 +222,46 @@ Placement and layout:
 
 ```
 PLACE(widget, x, y, width, height)   NODE_ADD(parent, child)
+ANCHOR(widget, edge[, target][, target_edge][, offset])
+UNANCHOR(widget[, edge])             PACK(widget, policy_x[, policy_y])
+PAD(widget[, value])
+HSTACK(panel[, gap][, options])      VSTACK(panel[, gap][, options])
+GRID(panel[, columns][, gap][, options])      UNSTACK(panel)
 STYLE(widget, role, value)           LINK_VALUE(a, b)
 LINK_STATE(source, prop, target[, target_prop][, two_way])
 UNLINK(a)
 ```
+
+These are `crude.ui.layout` with one call per verb and no geometry of their own,
+so a script and a Python caller go through the same door. `ANCHOR` glues one edge
+of a widget to one edge of another - or of the panel the widget lives in, which is
+what leaving `target` out means, and `"parent"` says so in words. `left`, `right`,
+`top`, `bottom`, `center-x` and `center-y` are the edges, and the short forms
+(``"l"``, ``"cx"``) work here as they do anywhere else in the engine. Gluing both
+ends of one axis is a stretch rather than a fight, which is how a bar pinned left
+*and* right stays the window's width through a resize; gluing a middle to an edge
+is a contradiction and says so. `PACK` answers what a widget does when its
+container moves - `fixed`, `grow` for the same fraction of the container, `fill`
+for whatever nothing else used - and `PAD` how far a container's children start
+inside it, in pixels or as a skin token (`PAD(w)` gives the token's own answer
+back). `HSTACK`/`VSTACK`/`GRID` arrange a panel's children in a row, a column or
+cells of one size, and `UNSTACK` stops arranging them; an anchor is applied after
+pack and after any stack, so the axis a script glued stops being theirs to decide.
+
+`options` is a flat list of name/value pairs, and the words depend on the verb:
+`gap`, `pad` and `align` for the two stacks, and `dockable` as a fourth for
+`GRID`, which is how a panel is marked out as somewhere a group can be dropped
+(`widgets.md`, "Grids and cells"). A name outside that list is refused with the
+list printed in the message, because an option that was quietly ignored is a panel
+that came out different from the one the script asked for. Whatever the last word
+written was wins, so a `"gap"` in the list beats the positional argument that
+answered the same question first.
+
+`GET(w, "place")` reads a widget's glues back as the sentences `ANCHOR` answered
+with and `GET(w, "pack")` its two policies, so a script can check what it just
+told the layout to do. Neither word is a `SET` target: `place` and `pack` are
+rules the pass keeps rather than rows of a table, and the refusal names the verb
+that writes them.
 
 Custom kinds and props:
 

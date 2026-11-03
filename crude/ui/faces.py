@@ -30,7 +30,8 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .geometry import TAU, Point, TEXT_HEIGHT, clamp
+from .geometry import TAU, Point, TEXT_HEIGHT, clamp, rect_corners
+from .grid import cells as grid_cells
 from .scroll import thumb_rect
 from .skin import Skin
 
@@ -319,6 +320,36 @@ def _draw_scroll(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
         return 0
     renderer.rect(held[0], held[1], held[2], held[3],
                   skin.resolve("thumb").fill)
+    return renderer.op_count - before
+
+
+def _draw_grid(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """A panel's face: its own words, and its cells while a drop is possible.
+
+    The label is drawn by :meth:`~crude.ui.widget.Widget.paint_label` because
+    registering a face *replaces* that call in ``base_face``, and a panel that lost
+    its caption when it gained the ability to be a dock would be a regression
+    dressed up as a feature. Everything else is decoration, and the decoration is
+    kept back until it is wanted: an ordinary grid draws nothing extra, and one
+    marked ``dockable`` shows its cells only while a drag is in progress - the one
+    moment the outlines are an answer to a question the person is asking rather
+    than a frame painted inside a frame.
+
+    The rectangles come from :func:`crude.ui.grid.cells`, which reads the rows the
+    layout pass wrote when it arranged them, so the outline a person is aiming at
+    is the box the child was actually given and not a second arithmetic that
+    happens to agree with it today.
+    """
+    before = renderer.op_count
+    widget.paint_label(renderer, found)
+    if not widget.get("dockable") or not widget.get("docking"):
+        return renderer.op_count - before
+    edge = max(1.0, float(found.width or 0.0))
+    for box in grid_cells(widget):
+        if box[2] <= 0.0 or box[3] <= 0.0:
+            continue
+        renderer.polyline(rect_corners(*box), thickness=edge,
+                          color=found.border, closed=True)
     return renderer.op_count - before
 
 
@@ -739,6 +770,10 @@ FACES: Dict[str, Face] = {
     # a viewport is a panel with a mark on it: the plate and the clip come from the
     # base face and this only answers the thumb
     "scroll": _draw_scroll,
+    # a panel is the plate and the word and nothing else, until it is marked
+    # dockable and something is being dragged - which is the only decoration the
+    # face below ever adds, so an ordinary panel is drawn exactly as it was before
+    "panel": _draw_grid,
 }
 
 

@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .base import RGBA, Renderer, UIError
 from .behaviour import behaviour_for
 from .geometry import scale_of
+from .grid import reconcile as reconcile_grids
 from .handlers import Handlers
 from .input import InputRouter
 from .layout import describe_layout, resolve
@@ -242,7 +243,15 @@ class UIContext:
         asking them before the arrangement would report the frame before this one,
         and asking them during a paint would have the draw pass write props. The
         two numbers only ever move when the content does, so an idle frame costs a
-        walk and nothing else.
+        walk and nothing else. The one half that is not an answer about the rows -
+        how wide the content may be - is taken up by the pass itself, before it
+        counts any box, so a row that fills its viewport is sized at this frame.
+
+        The same is true of the one fact a face cannot see for itself: whether a
+        drag is in progress. A painter is handed a widget, a renderer and a skin,
+        and the pointer holding a group over a dockable panel is the router's, so
+        the frame writes it on the panels that have the row, and a grid outlines
+        its cells for exactly as long as the gesture lasts.
 
         A new client rect is answered here as well as by the queued resize event:
         when the root's box and the window's rect disagree, the root is told before
@@ -257,6 +266,7 @@ class UIContext:
         moved = resolve(self.root, self.skin, width=self.width,
                         height=self.height, dpr=self.grid)
         restack(self.root)
+        reconcile_grids(self.root, dragging=self.dragging is not None)
         self.moved = moved
         # the tree may have moved under a pointer that did not
         self.router.rehover()

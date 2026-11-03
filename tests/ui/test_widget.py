@@ -25,16 +25,17 @@ from typing import Any
 
 import pytest
 
-from crude.ui import (CONTAINER_KIND, InputRouter, MODS, NullRenderer, POINTER,
-                      Panel, PropError, RecordingRenderer, Skin, Widget,
+from crude.ui import (CONTAINER_KIND, InputRouter, MEASURED, MODS,
+                      NullRenderer, POINTER, Panel, PropError,
+                      RecordingRenderer, Skin, Widget,
                       WidgetError, define, define_prop, format_value,
                       install_behaviour, reset, root_panel, top_at)
 
-#: the nineteen kinds the catalog ships, same list as :mod:`test_props`
+#: the twenty-two kinds the catalog ships, same list as :mod:`test_props`
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "adsr", "curve", "xy", "keybed",
-           "preset_bar")
+           "waveform", "spectrum", "plot", "logview", "scroll",
+           "adsr", "curve", "xy", "keybed", "preset_bar")
 
 
 @pytest.fixture(autouse=True)
@@ -120,10 +121,19 @@ def test_a_script_cannot_write_what_the_pointer_writes(word):
 
 @pytest.mark.parametrize("kind", CATALOG)
 def test_the_pointer_rows_are_exactly_the_rows_the_table_closed_to_a_script(kind):
+    """A ``SET`` is refused by two owners only: the pointer, and a measuring pass.
+
+    ``POINTER`` is the first family and :data:`MEASURED` the second - the numbers a
+    viewport and a grid of cells answer with, which a script reads and never writes
+    because the next frame would overwrite whatever it put there. Naming both is
+    what makes this a guard rather than a snapshot: a new read-only row has to be
+    said to be one of the two, and a row that is neither is a row a script should
+    be allowed to write.
+    """
     held = Widget(kind)
     closed = {name for name, prop in held.kind.props.items() if prop.readonly}
-    assert closed == set(POINTER), kind
-    assert set(held.writable()) == set(held.values()) - set(POINTER), kind
+    assert closed == set(POINTER) | (set(MEASURED) & set(held.kind.props)), kind
+    assert set(held.writable()) == set(held.values()) - closed, kind
 
 
 def test_a_prop_is_read_the_way_it_was_written_even_though_names_are_lowered():
@@ -334,7 +344,7 @@ def test_a_panel_is_a_panel_kind_and_a_panel_kind_is_a_container():
     held = Panel()
     assert held.kind.name == CONTAINER_KIND
     assert held.is_container is True
-    assert str(held.kind) == "Kind(panel, 22 props, emits [cnv])"
+    assert str(held.kind) == "Kind(panel, 27 props, emits [cnv])"
     # a Panel built on a script kind is still a panel, and the kind is its own
     define("card", CONTAINER_KIND)
     assert Panel(kind="card").kind.name == "card"

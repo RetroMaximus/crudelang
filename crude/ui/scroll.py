@@ -39,8 +39,8 @@ from .geometry import Rect
 
 __all__ = ["BAR_WIDTH", "MIN_THUMB", "content_of", "rows_in", "view_of",
            "view_width", "measure", "travel_of", "content_height", "slide",
-           "scroll_by", "page", "top", "bottom", "thumb_rect", "reconcile",
-           "restack"]
+           "scroll_by", "page", "top", "bottom", "thumb_rect", "fit_content",
+           "reconcile", "restack"]
 
 #: how wide the thumb is drawn, in logical pixels; a scroll bar is read, not aimed
 #  at with precision, and a fifth of a device list's row is wide enough to see
@@ -200,6 +200,34 @@ def thumb_rect(scroll: Any) -> Optional[Rect]:
     at = (abs(offset) / travel) * room if travel > 0.0 else 0.0
     across = max(0.0, width - BAR_WIDTH - 1.0)
     return left + across, top_edge + at, BAR_WIDTH, share
+
+
+#: how far the view's width has to change before the pre-pass writes the content
+#  panel again: below this the two numbers are the same answer, and an idle frame
+#  must report that nothing moved
+_SETTLED = 1e-6
+
+
+def fit_content(scroll: Any) -> int:
+    """Give the content panel this frame's view width, before its rows are arranged.
+
+    The half of a settle that has to happen first. The panel's width is a question
+    about the viewport alone - the width of its content box - while its height is the
+    bottom of the last row and so cannot be known until the rows have been arranged
+    inside it. Leaving the width to be written after the arrangement as well lets a
+    row packed ``fill`` be sized against the window the *last* frame had, so one
+    resize costs two passes before the page is right: the first lays the rows out at
+    the old width, the second notices the content panel is now a different one.
+
+    Answers whether a box was written, because a layout pass counts what it moved.
+    """
+    inner = content_of(scroll)
+    if inner is None:
+        return 0
+    width = max(0.0, view_width(scroll))
+    if abs(float(inner.width) - width) <= _SETTLED:
+        return 0
+    return 1 if inner.place(None, None, width, None) else 0
 
 
 def reconcile(scroll: Any) -> Tuple[float, float]:

@@ -131,6 +131,12 @@ PLACE(gain,  24,  90, 150, 24)
 PLACE(dsp,   24,  224, 96, 28)
 PLACE(play,  24,  260, 120, 30)
 
+# the gain slider is the one control on this page whose length is its resolution:
+# ``grow`` keeps the fraction of the page 150 px of it was, so a wider window buys
+# a longer throw rather than a wider right margin (docs/widgets.md, "Placement and
+# layout" - the verbs are the same layout engine the dialogs are built with)
+PACK(gain, "grow", "fixed")
+
 SET(play, "glyph_off", "play")
 SET(play, "glyph_on", "pause")
 
@@ -140,7 +146,23 @@ SET(play, "glyph_on", "pause")
 VAR scope = WAVEFORM("Output")
 VAR log   = LOGVIEW("log")
 PLACE(scope, 336,  52, 280, 150)
-PLACE(log,   0,  395, 640, 30)
+PLACE(log,     0, 390, 640,  30)
+
+# the scope is the room between the control column and the page's right margin, and
+# the status line is the page's bottom band, so both are glued to the edges instead
+# of left at the numbers above - which are only right for the 640 x 420 window this
+# file was written in. A panel puts its children at its own content box and the root
+# has no border of its own to take off it, so the content box is the client rect:
+# at 640 wide the glues answer exactly the 280 and the 640 above, and at 900 they
+# answer 540 and 900 - the 260 px a placed 280 would have left between the scope's
+# right edge and the margin it was meant to stop at.
+# What each row keeps from PLACE is the axis no glue owns - the scope's y and
+# height, the line's height - because a glue that is not there does not invent one.
+ANCHOR(scope, "left", "parent", "left", 336)
+ANCHOR(scope, "right", "parent", "right", -24)
+ANCHOR(log, "left")
+ANCHOR(log, "right")
+ANCHOR(log, "bottom")
 
 ON_CHANGE(pitch, FUNC(v) -> PD_SEND(p, "pitch", v))
 ON_CHANGE(gain,  FUNC(v) -> PD_SEND(p, "gain", v))
@@ -159,6 +181,8 @@ WORKSPACE("voices")
 # reached by wheel, by the thumb or by the page keys rather than drawn past the
 # bottom edge - which is the whole reason a settings page is allowed to be long
 VAR page  = SCROLL("fm parameters")
+VAR dials = PANEL("")
+VAR notes = PANEL("")
 VAR index = KNOB("Index", 0, 12, 7)
 VAR gate  = KNOB("Level", 0, 1, 1)
 VAR cut   = KNOB("Cutoff", 20, 20000, 2000)
@@ -172,26 +196,61 @@ VAR note_view  = TEXT("the View menu switches between this page and the front pa
 # widget, so a knob left as a sibling of the page would be drawn past its bottom
 # edge instead of being part of the content that scrolls; added to the page, the
 # coordinates below measure from the top of the content rather than from the top
-# of the window, and the last line - 440 down a 356-tall view - is off the page
-# until a person asks for it
-PLACE(page, 0, 0, 640, 356)
-NODE_ADD(page, index)
-NODE_ADD(page, gate)
-NODE_ADD(page, cut)
+# of the window, and the last line of help is below the fold until a person asks
+# for it.
+# The page is glued to all four edges of the scene it lives in, because the room a
+# scene gives a page is the window's height less the menu bar, and a page placed at
+# a hand-written 388 keeps that band forever: a taller window would show the same
+# 388 with empty panel under it, and a shorter one would cut the page off. The
+# ``PLACE`` below is the same size the glues answer at this window, written so the
+# page has a box before the first pass that resolves it.
+PLACE(page, 0, 0, 640, 388)
+ANCHOR(page, "left")
+ANCHOR(page, "right")
+ANCHOR(page, "top")
+ANCHOR(page, "bottom")
+NODE_ADD(page, dials)
 NODE_ADD(page, graph)
-NODE_ADD(page, note_index)
-NODE_ADD(page, note_level)
-NODE_ADD(page, note_cut)
-NODE_ADD(page, note_view)
+NODE_ADD(page, notes)
+NODE_ADD(dials, index)
+NODE_ADD(dials, gate)
+NODE_ADD(dials, cut)
+NODE_ADD(notes, note_index)
+NODE_ADD(notes, note_level)
+NODE_ADD(notes, note_cut)
+NODE_ADD(notes, note_view)
 
-PLACE(index, 24,   8,  64, 64)
-PLACE(gate,  106,  8,  64, 64)
-PLACE(cut,   188,  8,  64, 64)
-PLACE(graph, 24,  96, 592, 140)
-PLACE(note_index, 24, 260, 592, 20)
-PLACE(note_level, 24, 300, 592, 20)
-PLACE(note_cut,   24, 340, 592, 20)
-PLACE(note_view,  24, 420, 592, 20)
+# three dials of one size in three cells of one size, and four lines of help in a
+# column with one gap between them: the x- and y-arithmetic this script used to do
+# in its head is the row's answer now. A row verb places the children it is handed,
+# so the ``PLACE`` lines under one give a size and no position - a cell centres the
+# 64 x 64 box a knob was sized at, and a stack lines the note rows up one after
+# another with the 20 px gap the script asked for between them. (The lines' width
+# is written for the reader rather than used: the column stretches them, which is
+# what "align", "stretch" is the option for.)
+# PAD(..., 0) is part of that and not decoration: cells are measured inside the
+# panel's content box, so a theme's padding would be added inside every one of them
+# and the numbers here would be the page's plus a skin's. And "fill" on the x axis
+# is what makes a row as wide as the room the viewport gives its content rather than
+# as wide as the window this file was written for - the content panel is as wide as
+# that room, so the row's right edge lands where the viewport's own inset begins.
+PLACE(dials, 24, 8, 580, 64)
+PACK(dials, "fill", "fixed")
+PAD(dials, 0)
+PLACE(index, 0, 0, 64, 64)
+PLACE(gate, 0, 0, 64, 64)
+PLACE(cut, 0, 0, 64, 64)
+GRID(dials, 3, 18)
+PLACE(graph, 24, 96, 580, 180)
+PACK(graph, "fill", "fixed")
+PLACE(notes, 24, 300, 580, 140)
+PACK(notes, "fill", "fixed")
+PAD(notes, 0)
+PLACE(note_index, 0, 0, 580, 20)
+PLACE(note_level, 0, 0, 580, 20)
+PLACE(note_cut, 0, 0, 580, 20)
+PLACE(note_view, 0, 0, 580, 20)
+VSTACK(notes, 20, ["align", "stretch"])
 
 # a log-scale cutoff (20..20000 Hz) and names pushed above the dials, so a
 # 64-pixel dial still says what it is

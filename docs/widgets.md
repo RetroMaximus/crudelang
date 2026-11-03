@@ -105,17 +105,50 @@ literal colour - a word that is not a role is read as a colour.
 
 ## Placement and layout
 
-`PLACE(w, x, y, width, height)` is the plan's one layout call. The numbers
-are in logical pixels; the renderer rounds once at draw, and anchors
-re-resolve on resize and DPI change. `NODE_ADD(parent, child)` puts a
-widget under a panel; the child's box is relative to the parent.
+`PLACE(w, x, y, width, height)` says where a widget stands. Everything else here
+says how it stays there while the window does not. The numbers are logical pixels;
+the renderer rounds once at draw, so a script reading `GET(w, "width")` sees the
+number it wrote, and the whole tree is re-resolved from the window's own size every
+frame (`crude.ui.layout.resolve`, run by :meth:`UIContext.layout`) - which is why a
+resize is answered without any script handling one. `NODE_ADD(parent, child)` puts
+a widget under a panel: the child's box is relative to the parent and it is
+clipped to it.
 
-An `Anchor` pins a widget's edges to the parent's edges. The default
-anchor is `(left=0, top=0, right=0, bottom=0)` - a fixed box that moves
-with the top-left. `PLACE`'s sugar sets the anchor from a keyword the
-script passes, and `crude.ui.layout.PACK` builds a stack. `DPI` rounding
-happens at draw time only: the widget's own box is logical, so a script
-reading `GET(w, "width")` sees the number it wrote.
+The other four verbs are the same Python functions a host caller uses, with the
+same words and the same refusals:
+
+| Call | What it decides |
+| ---- | --------------- |
+| `ANCHOR(w, edge[, target][, target_edge][, offset])` | glues one edge of `w` to one edge of another widget, or - with no `target`, which `"parent"` says in words - to the panel `w` lives in |
+| `PACK(w, policy_x[, policy_y])` | what `w` does when its container moves: `fixed` keeps the size, `grow` keeps the *fraction* of the container that size was, `fill` takes what nothing else used |
+| `PAD(w[, value])` | how far this container's children start inside it, in pixels or as a skin token; no argument gives the skin's own answer back |
+| `HSTACK` / `VSTACK` / `GRID(panel, ...)` | arranges a panel's children left to right, top to bottom, or in cells of one size; `UNSTACK(panel)` stops |
+
+An edge is `left`, `right`, `top`, `bottom`, `center-x` or `center-y`, and the
+short forms the engine already answers (`"l"`, `"r"`, `"cx"`, `"middle"`) work
+here too; a policy may be said as `keep`, `scale`, `expand` or `stretch`, and an
+alignment as `start`, `center`/`centre`/`middle`, `end` or `stretch`, because
+:func:`crude.ui.layout.as_edge`, `as_policy` and `as_alignment` are the only
+translators, for a script and a Python caller alike.
+
+Two rules on one axis are not a contradiction. Gluing `left` *and* `right` is a
+stretch - that is how a bar pinned to both window edges is the window's width on
+the frame after a resize - while gluing a middle to an edge on the same axis is
+refused, because the pass would have to pick one. A glue is applied after padding,
+after pack and after any stack, and it *owns* the axis it names: a widget in a row
+that is also glued on `x` is placed on `x` by its glue alone and still arranged on
+`y` by the row, which is what a script that wrote both almost certainly meant.
+Taking a glue away (`UNANCHOR(w[, edge])`) hands the axis back to pack and
+answers how many rules left; the widget keeps the box the glue last wrote rather
+than being re-placed by hand.
+
+`GET(w, "place")` reads a widget's glues back in edge order as the sentences
+`ANCHOR` answered with (`"right -> root/box.right -8"`), and `GET(w, "pack")` its
+two policies, so every verb's answer can be checked by asking the layout what it
+was told. Neither word is a `SET` target: they are rules the pass keeps, not rows
+of a prop table, and the refusal names the verb that writes them - as does an
+unknown option in a stack's name/value list, which prints the options that verb
+has.
 
 `LINK_VALUE(a, b)` mirrors a numeric prop between two widgets and guards
 against a feedback loop with a one-hop depth check plus an epsilon
@@ -224,6 +257,11 @@ and the next layout pass re-clamps whatever a script wrote to the travel
 the rows actually have. `content` and `travel` answer themselves after the
 layout pass (`crude.ui.scroll.reconcile`, run over the whole tree by
 `restack`), which is why a script that wrote them would only be overwritten.
+The one half of that settle that is *not* an answer about the rows - how wide
+the content may be - is taken up before any box is counted (`crude.ui.scroll.fit_content`
+is the pass's first step), because a row packed `fill` is sized against the
+content panel's box and a panel resized after its rows were arranged would leave
+every row one window behind.
 
 Every gesture writes the one prop and is installed by the kind, so a script
 that registers `ON_SCROLL` of its own is chained after it rather than
@@ -244,6 +282,51 @@ face that plots them; these are pixels.
 Like `plot` and `logview`, a viewport has no Pd twin: `pd_object` stays
 empty, `PD_EMIT` never writes one, and the role it inherits is `panel`,
 which keeps it out of the tab order.
+
+## Grids and cells
+
+`GRID(box, 2, 10)` divides `box`'s content area into cells of one size and hands
+each child its cell, left to right then top to bottom. The rows are what the
+children fill: two columns and four children is a 2 x 2 grid, and `columns` of `0`
+means as many as make the grid square rather than as many as there are room for, so
+five children get three columns and two rows - with the sixth cell measured,
+drawable and empty rather than invented. A child whose policy is `fill` takes its
+whole cell; anything else sits inside it at the row's `align`, which a grid
+defaults to `"center"`.
+
+The arithmetic is one module's, not two. `crude.ui.grid.GridSpec(columns, rows,
+gap)` answers `rect_of(index, box)` and `index_at(x, y, box)` for any box, and the
+layout pass calls it rather than keeping its own division - so the cell a stack
+arranged and the cell a drop would be counted against are literally the same
+function of the same rectangle. `index_at` answers `None` for a point in a gap or
+outside the panel: the space between two cells belongs to neither, and a drop that
+landed there is refused in words rather than snapped somewhere the pointer was not.
+
+A panel that has been arranged answers for itself, out of the rows the pass wrote:
+
+| Prop           | Read as                                                |
+| -------------- | ------------------------------------------------------ |
+| `grid_columns` | how many columns this panel's cells are counted in, as the pass arranged them; 0 until it has |
+| `grid_rows`    | how many rows of cells there are, the empty ones included |
+| `grid_gap`     | the pixels between two cells, measured from whatever the stack called for - a token included |
+| `dockable`     | whether this panel offers its cells as somewhere a group can be dropped into; the one row here a script writes, and what `GRID(box, 2, 10, ["dockable", 1])` sets |
+| `docking`      | a drag is in progress in this window, which is the only moment a `dockable` panel draws its cell outlines |
+
+The first three and the last are written by the layout pass and by the frame, not
+by a hand: they are the four members of `crude.ui.props.MEASURED` that are not a
+viewport's, so a `SET` refuses them the way it refuses a scroll area's `travel` -
+"is measured by the layout pass, not written by a script". A script that named its
+own column count would be describing a grid nothing made, and `UNSTACK(box)` takes
+the rows back to zero rather than leaving them at the shape of an arrangement that
+no longer exists.
+
+The outlines are kept back until they are wanted. An ordinary grid - dockable or
+not - draws nothing extra over the panel's own face, because a frame painted
+inside every frame is decoration, not information; a `dockable` panel shows its
+cells only while a drag is in progress, and the rectangles it draws are read out of
+the same rows a `GET` answers with. A panel's face still paints its own label when
+it grows this ability, since registering a face replaces that call rather than
+adding to it.
 
 ## Menus and dialogs
 

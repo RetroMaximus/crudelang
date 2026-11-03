@@ -49,11 +49,12 @@ from .base import UIError
 from .glyphs import icon_names
 from .skin import SIZES, role_names
 
-__all__ = ["KINDS", "PD_BOXES", "SCHEMA", "State", "TYPES", "Kind", "Prop",
-           "PropError", "catalog_names", "define", "define_prop", "digest",
-           "document", "exists", "get_kind", "has", "hint_for", "pd_arguments",
-           "pd_object_for", "prop_names", "props_of", "registered_names",
-           "reset", "settle", "settled", "states", "value_of"]
+__all__ = ["KINDS", "MEASURED", "PD_BOXES", "SCHEMA", "State", "TYPES", "Kind",
+           "Prop", "PropError", "catalog_names", "define", "define_prop",
+           "digest", "document", "exists", "get_kind", "has", "hint_for",
+           "pd_arguments", "pd_object_for", "prop_names", "props_of",
+           "registered_names", "reset", "settle", "settled", "states",
+           "value_of"]
 
 #: the four types a script may name in ``PROP_DEFINE``. Anything the language can
 #: already hold, so no coercion here has to guess.
@@ -447,9 +448,18 @@ class Kind:
         return {name: prop.default for name, prop in self.props.items()}
 
     def settable(self, name: Any) -> Prop:
-        """:meth:`get`, plus the refusal a script's ``SET`` should get."""
+        """:meth:`get`, plus the refusal a script's ``SET`` should get.
+
+        One flag, two owners. The pointer's four state rows and the numbers a
+        layout pass measures are both read-only for a script, and a refusal that
+        blamed the keyboard for ``travel`` would send a person looking for the
+        wrong thing, so each family is named by whoever writes it back.
+        """
         prop = self.get(name)
         if prop.readonly:
+            if prop.name in MEASURED:
+                raise PropError(f"'{self.name}.{prop.name}' is measured by the "
+                                "layout pass, not written by a script")
             raise PropError(f"'{self.name}.{prop.name}' is written by the "
                             "pointer or the keyboard, not by a script")
         return prop
@@ -754,9 +764,53 @@ _SCROLL: Dict[str, Prop] = {
                   rng=(0.0, None)),
 }
 
+#: the rows a container that arranges its children into cells answers with. They
+#  are named apart rather than as ``columns`` and ``rows`` because the template
+#  below is one flat table: ``columns`` is already a radio's Pd argument and
+#  ``rows`` is already a viewport's row height in pixels, and a third meaning
+#  sharing either name would be a collision the table cannot see, let alone
+#  refuse. The three measurements are written by the pass that laid the cells out
+#  (:func:`crude.ui.grid.record`) and are read-only for a script for the same
+#  reason ``travel`` is; ``dockable`` is the one row a script does write, and
+#  ``docking`` the fact a face cannot reach - the pointer dragging something
+#  across this panel belongs to the frame, not to the widget being painted.
+_GRID: Dict[str, Prop] = {
+    "grid_columns": _row("grid_columns", "number", 0.0,
+                         "How many columns this panel's cells are counted in, as "
+                         "the layout pass arranged them; 0 until it has.",
+                         rng=(0.0, None), ro=True),
+    "grid_rows": _row("grid_rows", "number", 0.0,
+                      "How many rows of cells there are, the empty ones included; "
+                      "0 until the pass has measured a grid here.",
+                      rng=(0.0, None), ro=True),
+    "grid_gap": _row("grid_gap", "number", 0.0,
+                     "The pixels between two cells, measured from whatever the "
+                     "stack called for - a token included - so a drop can be "
+                     "counted against the same gap that was drawn.",
+                     rng=(0.0, None), ro=True),
+    "dockable": _row("dockable", "bool", False,
+                     "Whether this panel offers its cells as somewhere a group "
+                     "can be dropped into."),
+    "docking": _row("docking", "bool", False,
+                    "A drag is in progress somewhere in this window, which is "
+                    "when a dockable panel draws its cells.", ro=True),
+}
+
 #: every row a kind may ask for by name, in one place, so asking for a row that
 #  is not there is an error that names the rows that are
-_TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL}
+_TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL,
+                              **_GRID}
+
+#: the rows a *pass* measures rather than the pointer writes: the two a viewport
+#  answers with and the four a panel's cells are counted in. They are read off the
+#  tables above instead of spelled out again, so a row that starts being measured
+#  is closed to a script in the same commit it is declared. :data:`POINTER` in
+#  :mod:`crude.ui.widget` names the other family of closed rows, and the two
+#  together are every row in the catalog a ``SET`` refuses - which is proved, per
+#  kind, by :mod:`tests.ui.test_widget`.
+MEASURED: Tuple[str, ...] = tuple(
+    name for group in (_SCROLL, _GRID)
+    for name, row in group.items() if row.readonly)
 
 
 # --------------------------------------------------------------------------
@@ -1229,7 +1283,9 @@ def document(kind: Any = None) -> Dict[str, Any]:
 # the faces a window is made of. None of them holds a value, which is the point:
 # a panel that answered GET(w, "value") would be a panel with a default nobody set
 _kind("panel", "cnv", hint="A box other widgets live in; children clip to it.",
-      args=("label",), role={"default": "panel"})
+      args=("label",),
+      rows=("grid_columns", "grid_rows", "grid_gap", "dockable", "docking"),
+      role={"default": "panel"})
 _kind("text", "", hint="One line of text, drawn in the skin's ink.",
       args=("label",), role={"default": "text"})
 _kind("icon", "", hint="A glyph from the atlas, sized by the box it is in.",

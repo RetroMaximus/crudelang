@@ -146,6 +146,11 @@ from .layout import (
     as_policy,
     clear_layout,
     describe_layout,
+    # the arrange verb. Its name is also the name of the module those cells are
+    # measured by (:mod:`crude.ui.grid`), and a package attribute can only hold one
+    # of the two: this export wins it, so the *module* is reached by importing names
+    # out of it rather than as ``crude.ui.grid`` after a dot. A test in
+    # ``tests/ui/test_grid_spec.py`` pins which of the two each spelling answers.
     grid,
     hstack,
     layout_of,
@@ -174,11 +179,12 @@ from .paint import (
     in_region,
     region_of,
 )
-from .props import (KINDS, PD_BOXES, SCHEMA, State, TYPES, Kind, Prop,
-                    PropError, catalog_names, define, define_prop, digest,
-                    document, exists, get_kind, has, hint_for, pd_arguments,
-                    pd_object_for, prop_names, props_of, registered_names,
-                    reset, settle, settled, states, value_of)
+from .props import (KINDS, MEASURED, PD_BOXES, SCHEMA, State, TYPES, Kind,
+                    Prop, PropError, catalog_names, define, define_prop,
+                    digest, document, exists, get_kind, has, hint_for,
+                    pd_arguments, pd_object_for, prop_names, props_of,
+                    registered_names, reset, settle, settled, states,
+                    value_of)
 from .recording import RecordingRenderer
 from .ring import (
     DEFAULT_BAND,
@@ -259,7 +265,7 @@ __all__ = [
     "SCHEMA", "get_kind", "exists", "has", "define", "define_prop", "reset",
     "catalog_names", "registered_names", "props_of", "prop_names", "hint_for",
     "settle", "settled", "states", "value_of", "pd_object_for", "pd_arguments",
-    "digest", "document",
+    "digest", "document", "MEASURED",
     # the tree itself: boxes, z-order, hit tests, focus, and a face to paint
     "Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
     "SHARED_WORKSPACE", "format_value", "root_panel", "top_at",
