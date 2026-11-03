@@ -43,6 +43,8 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from .geometry import clamp
 from .input import SCROLL_NOTCH
 from .props import get_kind
+from .scroll import (bottom as scroll_bottom, page, scroll_by, slide,
+                     thumb_rect, top as scroll_top)
 
 __all__ = ["BEHAVIOURS", "behaviour_for", "install_behaviour", "on_event",
            "GESTURE_BUTTON", "PAGE_FACTOR", "span_of", "logarithmic",
@@ -64,7 +66,12 @@ _ENTER = ("enter", "keypad enter")
 _ESCAPE = ("escape",)
 _ERASE = ("backspace", "delete")
 _ACTIVATE = (" ", "enter", "keypad enter")
-_PAGE_UP, _PAGE_DOWN = ("page up", "page down")
+# one-element tuples, not bare strings, because every reader below spells the test
+# as ``name in _PAGE_UP``: given a string, ``"in"`` is a substring search and an
+# arrow key called "down" would answer to "page down" - a page for a press that
+# meant one row, in every widget that has a keyboard
+_PAGE_UP = ("page up",)
+_PAGE_DOWN = ("page down",)
 _DIGITS = "0123456789.-"
 
 
@@ -666,6 +673,89 @@ def _logscroll() -> Dict[str, Callable[..., Any]]:
 
 
 # --------------------------------------------------------------------------
+# the viewport
+# --------------------------------------------------------------------------
+
+def _viewport() -> Dict[str, Callable[..., Any]]:
+    """A ``scroll``: the wheel, a thumb, a click on the track and the page keys.
+
+    Every one of them writes the ``offset`` prop and nothing else, which is what
+    makes ``SET(s, "offset", 0)`` and a hand on the wheel the same gesture: the
+    clamp to ``[-travel, 0]`` lives in :mod:`crude.ui.scroll`, so a behaviour that
+    tried to keep its own copy of the limit would disagree with the face that draws
+    the bar and with the script that jumps to a row. The content panel's box is
+    derived from the prop one way - there - and never written here.
+
+    The direction is the log view's and the settings dialog's, not a browser's: a
+    notch pushed away from the person moves the *window* up the content. Two
+    existing controls in this toolkit already answer a wheel that way, and a
+    viewport that ran the other would be one widget arguing with its neighbours.
+
+    A press inside the plate belongs to whatever row is under it - a device list is
+    a column of toggles and grabbing one must not slide the list - so only the bar's
+    own column takes a press, and only the thumb keeps a drag.
+    """
+
+    def pressed(widget: Any, args: Tuple[Any, ...]) -> None:
+        if not _is_gesture(args):
+            return
+        held = thumb_rect(widget)
+        if held is None:
+            return
+        wanted, aimed = float(_args(args, 0)), float(_args(args, 1))
+        bar_left, bar_top, bar_wide, bar_high = held
+        # the bar's column, which is the only part of a viewport a scroll gesture
+        # owns: everything to the left of it is the content's to answer for, and a
+        # finger on a device row must toggle the row rather than move the list
+        if not (bar_left - 1.0 <= wanted < bar_left + bar_wide + 1.0):
+            return
+        scratch = _held(widget)
+        if bar_top <= aimed < bar_top + bar_high:
+            # grabbed where it is, so the first millimetre of the hand does not
+            # teleport the page - the drag below is measured from this number
+            scratch["thumb"] = float(widget.get("offset") or 0.0)
+            return
+        # a click on the empty track pages towards the click, the way every scroll
+        # bar in every window manager has behaved since there were window managers
+        page(widget, -1 if aimed < bar_top else 1)
+
+    def dragged(widget: Any, args: Tuple[Any, ...]) -> None:
+        scratch = _held(widget)
+        if "thumb" not in scratch:
+            return
+        moved = float(_args(args, 1))
+        slide(widget, float(scratch["thumb"]) + moved)
+
+    def released(widget: Any, args: Tuple[Any, ...]) -> None:
+        _held(widget).pop("thumb", None)
+
+    def scrolled(widget: Any, args: Tuple[Any, ...]) -> None:
+        notches = _notches(args)
+        if notches:
+            scroll_by(widget, notches)
+
+    def keyed(widget: Any, args: Tuple[Any, ...]) -> None:
+        name = str(_args(args, 0, ""))
+        row = float(widget.get("rows") or 0.0)
+        held = float(widget.get("offset") or 0.0)
+        if name in _PAGE_UP:
+            page(widget, -1)
+        elif name in _PAGE_DOWN:
+            page(widget, 1)
+        elif name in ("up", "left") and row > 0.0:
+            slide(widget, held + row)
+        elif name in ("down", "right") and row > 0.0:
+            slide(widget, held - row)
+        elif name == "home":
+            scroll_top(widget)
+        elif name == "end":
+            scroll_bottom(widget)
+
+    return {"on_press": pressed, "on_drag": dragged, "on_release": released,
+            "on_scroll": scrolled, "on_key": keyed}
+
+
+# --------------------------------------------------------------------------
 # the synth widgets: gestures against a picture, not a thumb
 # --------------------------------------------------------------------------
 
@@ -956,6 +1046,9 @@ BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     "keybed": _keyboard(),
     "preset_bar": _cells(),
     "logview": _logscroll(),
+    # a viewport moves its content rather than a value, and every one of its
+    # gestures writes the ``offset`` prop the content panel is placed from
+    "scroll": _viewport(),
 }
 
 

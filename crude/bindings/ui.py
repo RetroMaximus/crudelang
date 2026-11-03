@@ -113,6 +113,9 @@ CONSTRUCTORS: dict = {
         ("PLOT", "plot"), ("LOGVIEW", "logview"),
         ("ADSR", "adsr"), ("CURVE", "curve"), ("XY_PAD", "xy"),
         ("KEYBED", "keybed"), ("PRESET_BAR", "preset_bar"),
+        # the viewport: a panel a script fills with children and the pointer
+        # slides, so its one argument is the panel's own label
+        ("SCROLL", "scroll"),
     )
 }
 CONSTRUCTORS["ICON"] = ("icon", ("glyph", "size"), 1)

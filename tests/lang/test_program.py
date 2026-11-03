@@ -151,10 +151,20 @@ def test_shim_keeps_repl_state_like_the_original():
 
 
 # -- parity with the historical behaviour ----------------------------
-def test_testscript_crude_behaves_like_the_original(repo_root, capsys):
-    program = Program("testscript.crude")
-    value, error = program.run_file(str(repo_root / "testscript.crude"))
-    assert error is None
+def test_the_join_a_string_example_behaves_like_the_original(repo_root, capsys):
+    """The oldest script in the project, run the way it was always run.
+
+    It lived at the repository root as ``testscript.crude`` until the cleanup
+    moved it into ``examples/join_a_string``, which is where a script that is only
+    there to prove the language still works belongs. The assertions are the original
+    ones, unchanged: this is a parity test on the interpreter, not a test of the
+    example's manifest or of any host binding, so it runs the file through
+    :meth:`Program.run_file` with no host at all.
+    """
+    script = repo_root / "examples" / "join_a_string" / "main.crude"
+    program = Program(script.name)
+    value, error = program.run_file(str(script))
+    assert error is None, error.as_string()
 
     out = capsys.readouterr().out.splitlines()
     assert out[0] == "loop"

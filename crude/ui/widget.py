@@ -55,7 +55,8 @@ from .props import State, digest, get_kind, pd_arguments, pd_object_for
 from .skin import ROLES, Skin, as_role
 
 __all__ = ["Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
-           "format_value", "DEFAULT_DECIMALS", "root_panel", "top_at"]
+           "CONTENT_KIND", "CONTENT_SUFFIX", "format_value",
+           "DEFAULT_DECIMALS", "root_panel", "top_at"]
 
 #: the four rows only the pointer and the keyboard may write
 POINTER = ("hovered", "pressed", "focused", "selected")
@@ -68,6 +69,16 @@ _DROPPED = ("hovered", "pressed", "focused")
 #  prop table rather than about a Python class, so ``WIDGET_DEFINE("deck",
 #  "panel")`` is a container with no new prop and no new code.
 CONTAINER_KIND = "panel"
+
+#: the kind that hands every child it is given to one inner panel of its own, so
+#: "scrollable" is a fact about a widget rather than about the code that built it.
+#: The name is the prop table's, exactly like :data:`CONTAINER_KIND`, which is what
+#: lets ``WIDGET_DEFINE("page", "scroll")`` inherit the routing too.
+CONTENT_KIND = "scroll"
+
+#: the inner panel's own name, hung off whichever name the script gave the viewport
+#: - so ``find("list#rows")`` answers and a report can tell the two apart.
+CONTENT_SUFFIX = "#rows"
 
 #: a widget's ``size`` prop is a skin scale, and building a
 #: :class:`~crude.ui.skin.Skin` resolves every role in it - so the five sizes a
@@ -380,6 +391,40 @@ class Widget:
             return False
         return self._write(prop, wanted)
 
+    def _measure(self, name: Any, value: Any) -> bool:
+        """Store a read-only row the layout pass answers for; tell nobody.
+
+        A scroll area's ``content`` and ``travel`` are the same kind of fact as the
+        pointer's four rows - the machine worked it out, the script did not ask for
+        it - but they cannot share :meth:`_machine`, which reports through
+        ``ON_CHANGE``. A measurement that moved because a window grew is not an edit
+        a person made, and an ``ON_CHANGE`` wired to a scroll area would fire once
+        per frame of a resize. So this writes the slot and nothing else: ``GET``
+        reads it, the paint key changes with it, ``changed`` stays empty.
+        """
+        prop = self.kind.get(name)
+        held = self._state.get(prop.name)
+        if held is None:
+            return False
+        found = prop.settle(value, values=self._state)
+        if not prop.would_move(held.value, found):
+            return False
+        held.value = found
+        return True
+
+    def remeasure(self) -> "Widget":
+        """Re-resolve this box and everything under it, where it stands.
+
+        The one thing a widget built between two frames cannot do for itself: a
+        padding overruled, an anchor added, a child adopted - each changes the space
+        children are measured *in*, which is remembered as an inset and only
+        refreshed by a resolve. A caller that has just written such a fact asks for
+        this one, so the next ``hit`` and the next ``paint`` agree without waiting a
+        frame for ``UIContext.layout`` to notice.
+        """
+        self._resolve(*self._from, dpr=self._grid)
+        return self
+
     def values(self) -> Dict[str, Any]:
         """Every prop as a plain map - what :func:`digest` and ``PD_EMIT`` read."""
         return {name: held.value for name, held in self._state.items()}
@@ -661,6 +706,10 @@ class Widget:
         than appearing twice. A leaf refuses, by name and with the kind it
         actually is, because "why won't my slider take a child" is a question
         about the prop table and should be answered in those terms.
+
+        A viewport is the one container that does not keep what it is handed: its
+        children go to its :attr:`content_child`, because the thing that has to
+        move when the wheel turns is the content and not the window onto it.
         """
         if child is self:
             raise WidgetError("a widget cannot be inside itself")
@@ -674,6 +723,15 @@ class Widget:
             # it would walk back out of it and into the same child again forever
             raise WidgetError(f"'{child.path()}' cannot hold '{self.path()}': "
                               "that would make a loop the draw pass could not leave")
+        found = self.content_child
+        if found is not None and found is not self:
+            if found is child or child.is_in(found):
+                # the inner panel is the viewport's own; putting it, or something
+                # inside it, back into the viewport would hang the content off the
+                # window it is already the content of
+                raise WidgetError(f"'{child.path()}' is already the content of "
+                                  f"'{self.path()}'")
+            return found.add(child)
         child.detach()
         child.parent = self
         self._children.append(child)
@@ -682,6 +740,68 @@ class Widget:
         # in this tree's skin, which an un-laid-out parent has nothing to say about
         child._resolve(*self._kid_place(), skin=self._skin, dpr=self._grid)
         return child
+
+    @property
+    def content_child(self) -> Optional["Widget"]:
+        """Where this container's children actually go: itself, unless a viewport.
+
+        A :data:`CONTENT_KIND` widget builds one inner panel the first time it is
+        asked to hold something, and every later ``add`` walks through it, so a
+        scroll area is a container with a content box that can be slid rather than
+        a private convention inside whoever made it. The inner panel is a real
+        child: :meth:`walk`, the clip a panel owes its children, hit testing and a
+        removal all keep answering for it, and a script that wants the rows themselves
+        can hold ``widget.content_child`` rather than guess at a name.
+        """
+        if CONTENT_KIND not in self.kind.chain():
+            return None
+        for kid in self._children:
+            if kid.name.endswith(CONTENT_SUFFIX) and "panel" in kid.kind.chain():
+                return kid
+        return self._build_content()
+
+    def _build_content(self) -> "Widget":
+        """Make a viewport's inner panel, placed to be slid and to keep its width.
+
+        Built here rather than through :meth:`add` because ``add`` is the function
+        this one serves: a child created inside a viewport that then routed itself
+        through ``add`` would ask the same question again, and the answer is the
+        panel it is trying to build. The box is the three numbers the measure reads
+        - ``x`` at the content edge, ``y`` at the current offset, the height nothing
+        but the rows can answer for - and the two layout verbs are imported where
+        they run, because :mod:`crude.ui.layout` resolves widgets and so cannot be
+        imported by the module they are in.
+        """
+        from .layout import anchor, pack, pad as pad_children
+
+        inner = Widget("panel", {"label": ""},
+                       name=f"{self.name or 'scroll'}{CONTENT_SUFFIX}")
+        inner.parent = self
+        self._children.append(inner)
+        # the viewport's own inset first, so the content is measured from the edge
+        # children are actually placed at rather than from the box's corner
+        if self._layout is not None and self._layout.pad is not None:
+            self._inset = float(self._layout.pad)
+        # the inner panel owns no padding of its own: the rows are measured from
+        # the edge of the space the viewport gives them, and the viewport's own
+        # padding is the inset that keeps them off its border
+        pad_children(inner, 0.0)
+        # nothing is stacked inside it - the content places its own rows, and a
+        # filler child in a box the measure owns would be arranged against a height
+        # nobody has worked out yet
+        pack(inner, "fixed", "fixed")
+        # glued to the viewport's own width so a window resize is what the rows are
+        # measured against, and to nothing on y: the offset owns that axis. The
+        # width is taken from the content box here as well, because a tree that has
+        # never been resolved has never run the glue: a zero-width content panel
+        # would clip its own rows to nothing and a paper test could neither paint a
+        # row nor click one.
+        anchor(inner, "left")
+        anchor(inner, "right")
+        inner.place(0.0, float(self.get("offset") or 0.0),
+                    max(0.0, self.content_box()[2]), 0.0)
+        self.remeasure()
+        return inner
 
     #: ``PANEL``-and-``NODE_ADD`` spell it as a method too, for a caller that has
     #  the parent in hand rather than the child
@@ -696,6 +816,13 @@ class Widget:
 
     def remove(self, child: "Widget") -> "Widget":
         """Take one child out of the z-order; it keeps its props and its box."""
+        found = self.content_child
+        if (found is not None and found is not self and child is not found
+                and child.parent is not self):
+            # ``remove`` reads the other way round from ``add``: the caller holds a
+            # row and points at the viewport, so a child of the content is this
+            # viewport's to take away, and a leaf under it is not nothing
+            return found.remove(child)
         if child.parent is not self:
             raise WidgetError(f"'{child.path()}' is not inside '{self.path()}', "
                               "so there is nothing here to remove")
@@ -712,7 +839,15 @@ class Widget:
         return self
 
     def clear(self) -> List["Widget"]:
-        """Take every child out, in z-order; what a rebuilt panel does to its own."""
+        """Take every child out, in z-order; what a rebuilt panel does to its own.
+
+        A viewport clears its content, not itself - the inner panel is the one thing
+        a rebuilt scroll area keeps, because the caller who says "empty this" means
+        the rows and not the box that slides them.
+        """
+        found = self.content_child
+        if found is not None and found is not self:
+            return found.clear()
         gone = list(self._children)
         for kid in gone:
             self.remove(kid)
@@ -1141,8 +1276,14 @@ class Widget:
         """
         if skin is not None:
             self._skin = skin
+        held = self._layout
         if self._skin is not None:
             self._inset = self._plate(self._skin)
+        elif held is not None and held.pad is not None:
+            # an explicit padding is the inset and needs no skin to measure it, and
+            # a container that was given one between two frames owes its children
+            # the answer now rather than after the next resolve
+            self._inset = float(held.pad)
         self._grid = float(dpr) if dpr and float(dpr) > 0 else None
         self._from = (origin, clip)
         box = (origin[0] + self.x, origin[1] + self.y, self.width, self.height)

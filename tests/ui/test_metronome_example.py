@@ -39,6 +39,7 @@ from crude.lang import Program
 from crude.lang.values import HostHandle, List as CrudeList, Number, String
 from crude.pd import FakeLibpd, PdRuntime, PdSession
 from crude.ui import RecordingRenderer, UIContext
+from crude.ui.menu import DIALOG_MARGIN, POPUP_PAD
 
 #: the repository root, whatever directory pytest was started in
 ROOT = Path(__file__).resolve().parents[2]
@@ -235,10 +236,10 @@ def test_the_script_builds_the_front_panel_it_describes(stage):
 
     title, led, bpm, field, run = (stage.say(name) for name in
                                    ("title", "led", "bpm", "field", "run"))
-    assert stage.ui.root.count() == 77, \
+    assert stage.ui.root.count() == 85, \
         "the panel's widgets, the menu bar and its rows, and the two device "\
-        "dialogs with their device lists, quick rate and blocksize buttons, "\
-        "status lines and action rows"
+        "dialogs with their scroll body and its content panel, their quick "\
+        "button grids, their action row and its three buttons"
     # a scope is a seventh widget: the plan's click that is visible, fed by the
     # same waveform the running stream reads
     scope = stage.say("scope")
@@ -506,6 +507,46 @@ def test_the_dsp_toggle_opens_and_closes_the_stream(stage):
     assert ("message", "pd", "dsp", (0.0,)) in stage.lib.sent
 
 
+# -- the settings page the menu opens -----------------------------------
+
+
+def test_the_audio_page_the_example_opens_ends_inside_its_window(stage):
+    """The regression this whole stage was asked for, on the shipped example.
+
+    The metronome's window is 360x220 and its audio page is the longest form the
+    toolkit builds: two device lists, a sample-rate field with a quick grid, a
+    blocksize grid, two more numbers and two toggles. It used to be laid out at a
+    height nothing measured, so Apply, Rescan and Cancel fell below the bottom edge
+    of the screen and could not be reached at all. Now the page is measured from
+    the window it opens in, the rows that do not fit are inside a scroll area, and
+    the three buttons are on the panel's bottom edge - which is only worth
+    asserting here, on the example a person actually runs.
+    """
+    row = stage.ui.find("Audio#Audio settings...")
+    assert row is not None, "the item the shipped script's MENU_AUDIO_DIALOG made"
+    row.on_click(0.0, 0.0)
+    stage.ui.layout()
+
+    popup = stage.ui.find("Audio#audio")
+    assert popup.visible is True
+    assert popup.y + popup.height <= HEIGHT - DIALOG_MARGIN, \
+        "the page stops where the window does"
+    assert popup.x + popup.width <= WIDTH - DIALOG_MARGIN
+    buttons = stage.ui.find("Audio#audio#actions")
+    said = buttons.screen_box
+    assert said[1] + said[3] == pytest.approx(
+        popup.y + popup.height - POPUP_PAD)
+    for word in ("apply", "rescan", "cancel"):
+        held = stage.ui.find(f"Audio#audio#{word}")
+        assert held.screen_box[1] + held.screen_box[3] <= HEIGHT
+    # what will not fit is not cut off: the body is a scroll area with room to move
+    body = stage.ui.find("Audio#audio#body")
+    assert float(body.get("travel")) > 0.0
+    before = float(body.get("offset"))
+    body.on_scroll(0.0, -3 * 16.0, 0)
+    assert float(body.get("offset")) < before, "the wheel reaches the page"
+
+
 # -- the headless half --------------------------------------------------
 
 
@@ -525,7 +566,7 @@ def test_a_headless_run_sends_the_same_and_draws_nothing(stage, headless):
     assert headless.renderer.ops == []
 
     windowed, silent = stage.ui.frame(dt=0.05), headless.ui.frame(dt=0.05)
-    assert (windowed.widgets, silent.widgets) == (77, 77), "the same tree counted"
+    assert (windowed.widgets, silent.widgets) == (85, 85), "the same tree counted"
     assert (windowed.handlers, silent.handlers) == (1, 1), "ON_FRAME ran twice"
     assert windowed.ops > 0, "the panel a window would show"
     assert silent.ops == 0

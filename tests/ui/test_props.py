@@ -32,12 +32,13 @@ from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       prop_names, props_of, registered_names, reset, settle,
                       settled, states, UIError, value_of)
 
-#: the twenty-one kinds the plan's widget list adds up to: the twelve faces and
+#: the twenty-two kinds the plan's widget list adds up to: the twelve faces and
 #  controls, plus the nine synth widgets and canvases S9 put on the same
-#  conventions
+#  conventions, plus the viewport the settings dialog grew into a kind
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
+           "waveform", "spectrum", "plot", "logview", "scroll",
+           "adsr", "curve", "xy",
            "keybed", "preset_bar")
 
 

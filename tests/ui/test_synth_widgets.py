@@ -44,9 +44,11 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
 #: the kinds that own a face: every one of them draws a picture inside the plate,
 #  from the eight synth displays and canvases to the ranges, the meter, the radio's
 #  cells and the dial - while ``vslider`` and ``preset_bar`` are proved below to
-#  reach a face through the chain instead of by owning one
+#  reach a face through the chain instead of by owning one. ``scroll`` is the last
+#  and the odd one out: its plate is the panel it is built on and the only mark it
+#  adds is the thumb, which is a picture inside the plate all the same
 DISPLAY = ("waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
-           "keybed", "slider", "meter", "radio", "knob")
+           "keybed", "slider", "meter", "radio", "knob", "scroll")
 
 #: the kinds a bare plate and a word still describe: nothing here draws inside
 #  the plate, because a toggle is the plate and a panel is where the others sit
@@ -660,6 +662,35 @@ def test_a_logview_shows_the_newest_lines_and_the_wheel_older_ones(root, skin):
     moved = paint(held, skin).texts()
     assert moved[-1] != "line 39", "the window left the newest behind"
     assert moved[-1] == "line 19", "scrolling counts whole lines up from the tail"
+
+
+def test_the_logviews_arrow_keys_move_one_line_and_its_pages_move_ten(root, skin):
+    """An arrow is a line and a page is ten, which a key cap cannot tell you.
+
+    Asserted on a log view because this is the widget where the two are easiest to
+    mix up: both are counted in the same ``scroll`` prop, and a press of ``up`` that
+    answered the page instead would throw the window thirty-nine lines away from the
+    line the person was reading without drawing a single pixel that says so.
+    """
+    rows = [f"line {i}" for i in range(40)]
+    held = placed(root, skin, "logview", {"lines": rows}, box=(10, 10, 200, 60))
+    assert float(held.get("scroll")) == 0.0, "the newest line is the window's bottom"
+    held.on_key("up")
+    assert float(held.get("scroll")) == 1.0
+    held.on_key("up")
+    assert float(held.get("scroll")) == 2.0, "one line per press, not one page"
+    held.on_key("down")
+    assert float(held.get("scroll")) == 1.0
+    held.on_key("page up")
+    assert float(held.get("scroll")) == 11.0
+    held.on_key("page down")
+    assert float(held.get("scroll")) == 1.0
+    held.on_key("end")
+    assert float(held.get("scroll")) == 39.0, "the oldest line, and no further"
+    held.on_key("up")
+    assert float(held.get("scroll")) == 39.0, "the end is a clamp, not an error"
+    held.on_key("home")
+    assert float(held.get("scroll")) == 0.0
 
 
 # -- gestures: what pressing and dragging each picture means --------------

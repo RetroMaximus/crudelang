@@ -724,9 +724,39 @@ _SYNTH: Dict[str, Prop] = {
                      rng=(0.0, 127.0)),
 }
 
+#: the rows a scroll area owns. Every one of them is counted in **pixels**, which
+#  is what keeps them apart from a log view's ``scroll`` prop - that one counts
+#  *lines* of text and belongs to a face that plots them, while these are the two
+#  numbers a viewport and its content agree on, plus the two the wheel and the
+#  thumb are measured in. ``content`` and ``travel`` are read-only for a script for
+#  the same reason ``hovered`` is: the layout pass answers them, and a value a
+#  script wrote there would be overwritten by the next frame without saying so.
+_SCROLL: Dict[str, Prop] = {
+    "offset": _row("offset", "number", 0.0,
+                   "How far the content has been slid up, in logical pixels; 0 "
+                   "shows the top, and it is never a positive number.",
+                   rng=(None, 0.0)),
+    "content": _row("content", "number", 0.0,
+                    "The height the content asks for, read back after the layout "
+                    "pass; what is slid, rather than what is seen.", ro=True),
+    "travel": _row("travel", "number", 0.0,
+                   "How far the content can still be slid: ``content`` minus the "
+                   "view, never less than zero.", rng=(0.0, None), ro=True),
+    "bar": _row("bar", "bool", True,
+                "Whether the thumb is drawn along the right edge; off leaves the "
+                "wheel and the keys working and nothing painted."),
+    "notch": _row("notch", "number", 44.0,
+                  "How many pixels one wheel notch slides; the default is two "
+                  "rows of the height below.", rng=(0.0, None)),
+    "rows": _row("rows", "number", 22.0,
+                  "The row height the thumb and the notch are counted in, so a "
+                  "list can say what a row costs instead of trusting a face.",
+                  rng=(0.0, None)),
+}
+
 #: every row a kind may ask for by name, in one place, so asking for a row that
 #  is not there is an error that names the rows that are
-_TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH}
+_TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL}
 
 
 # --------------------------------------------------------------------------
@@ -1274,6 +1304,15 @@ _kind("plot", "", hint="A line graph of any value list, autoscaled to the span i
 _kind("logview", "", hint="A scrollable text area; the script appends rows to "
       "``lines`` and the newest that fit are shown, the wheel scrolling them.",
       args=("label",), rows=("lines", "scroll"), role={"default": "grid"})
+# the scroll area is a panel and nothing else: children clip to it because a panel
+# clips to it, and its one job is to slide the child panel ``content_child`` holds
+# for it. No Pd box is a viewport, so ``pd_object`` stays '' and the whole table is
+# drawn-and-read. The role is the inherited ``panel``, which is what keeps a
+# scroll area out of the tab order and off the accent pill a focusable role draws.
+_kind("scroll", "", base="panel",
+      hint="A viewport: the children added to it land in one inner panel that the "
+      "wheel, a thumb drag or the page keys slide, clipped to what fits.",
+      rows=("offset", "content", "travel", "bar", "notch", "rows"))
 # adsr and keybed hold a value but own no min/max rows, so value restates its
 # own bounds the way button and toggle do - the range is the table's promise,
 # not something a script can move out from under the face

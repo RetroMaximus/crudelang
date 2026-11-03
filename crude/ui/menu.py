@@ -47,10 +47,11 @@ a paper test can drive a whole menu with three lambdas and no interpreter.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 from .handlers import event_name
-from .layout import pad
+from .layout import anchor, grid, hstack, pack, pad
+from .scroll import measure, reconcile, scroll_by
 from .widget import Widget
 
 __all__ = ["MenuBar", "Menu", "MenuItem", "MenuDialog"]
@@ -80,8 +81,9 @@ POPUP_MIN_WIDTH = 120.0
 #  configuration panel is measured the same way a popup is, so it needs no skin
 #  and no layout pass to be placed or to be tested. The panel is wider than a
 #  menu popup because it carries whole settings rows - device names, a sample
-#  rate, a blocksize - and it stops growing at DIALOG_MAX_HEIGHT: past that the
-#  device lists inside it scroll instead of the dialog running off the window.
+#  rate, a blocksize - and it is *sized by the window it opens in*, not by a
+#  height it decides for itself: the page is what it is, and the room the window
+#  gives it is spent on a scroll area rather than on content off the bottom edge.
 DIALOG_WIDTH = 320.0
 CAPTION_HEIGHT = 14.0
 FIELD_HEIGHT = 24.0
@@ -91,11 +93,28 @@ TITLE_HEIGHT = 20.0
 BUTTON_GAP = 8.0
 LIST_ROW_HEIGHT = 22.0
 LIST_VIEW_HEIGHT = 110.0
+
+#: how far a dialog stays inside the window's client rect, on every side
+DIALOG_MARGIN = 8.0
+
+#: the shortest page that is still worth opening - a settings panel narrower than
+#  this cannot show its own title and one button, and a window that small gets a
+#  dialog that ends at its edge rather than one that overflows past it
+MIN_DIALOG_HEIGHT = 220.0
+
+#: the height a dialog *prefers*: a tall window does not get a taller settings
+#  page than this, because a form stretched to 900 pixels is one long column of
+#  captions and their gaps with nothing in them
 DIALOG_MAX_HEIGHT = 420.0
 
-#: how short a device list's window may be squeezed when a settings page runs out
-#  of room - two rows, so a capped dialog is still a list a person can read
-MIN_LIST_VIEW = 44.0
+#: the widest a page is allowed to get when a wide window offers more room: wide
+#  enough for a device name and a rate, no wider than a column a person can read
+DIALOG_MAX_WIDTH = 480.0
+
+#: the least room a scroll area is ever given. A page whose fixed rows already
+#  fill the window still gets a viewport a wheel can move rather than a body of
+#  nothing - the thumb and the wheel are how the rest of the page is reached
+MIN_BODY_HEIGHT = 44.0
 
 
 def _title_width(label: str) -> float:
@@ -382,8 +401,10 @@ class MenuDialog:
 
     The bottom row is ``Apply`` plus whatever ``buttons`` named - a bare
     ``"Cancel"`` closes without applying, a ``(label, fn)`` pair calls ``fn`` -
-    and the panel stops at DIALOG_MAX_HEIGHT, the lists taking the overflow on
-    their own wheels.
+    and the row is pinned to the *bottom of the panel* rather than to the end of
+    the content: the panel is measured from the window it opens in, and a page
+    longer than the room that leaves is scrolled by the body's own wheel, so no
+    settings page is ever cut off at the bottom edge of the screen.
 
     Nothing here knows what a device index or a baud is: a field carries the
     parallel ``payloads`` list the provider fills and :meth:`chosen` maps a pick
@@ -439,23 +460,57 @@ class MenuDialog:
         pad(self.popup, 0.0)
         self.popup.set("visible", False)
 
-        left = POPUP_PAD
-        top = POPUP_PAD
-        inner = DIALOG_WIDTH - 2 * POPUP_PAD
+        # the running y inside the body's content: every block is measured from
+        # the edge of the room the scroll area gives it, and the scroll area is
+        # what decides how much of it a person can see at once
+        top = 0.0
 
         # the title: the first row, at the top of the panel, in the skin's
         # title role - the one place a dialog's name can be read is where a
-        # person looks for it before touching anything else in it
+        # person looks for it before touching anything else in it. It is also the
+        # handle the whole page is dragged by (see :meth:`_wire_drag`), which is
+        # why it is a row of its own and not a label on the panel.
         self.title_widget = Widget("text", {"label": self.title,
                                             "role": "title"},
                                    name=f"{self.popup.name}#title")
         self.popup.add(self.title_widget)
-        self.title_widget.place(left, top, inner, TITLE_HEIGHT)
-        top += TITLE_HEIGHT + ROW_GAP
+
+        # the body: the one scroll area the page is made of. Every field block
+        # goes inside it, so a settings page longer than the window is *reached*
+        # with the wheel instead of running off the bottom edge, and its padding is
+        # the margin the rows are measured from.
+        self.body = Widget("scroll", {"label": ""},
+                           name=f"{self.popup.name}#body")
+        self.popup.add(self.body)
+        pad(self.body, POPUP_PAD)
+
+        # the two rows kept *outside* the body, so neither is ever scrolled away
+        # or clipped by it: what the last click said, and the buttons that decide
+        # the next one. Both are glued to the panel's bottom edge, which is what
+        # makes the body exactly the room between them and the title.
+        self.status = Widget("text", {"label": "", "role": "caption"},
+                             name=f"{self.popup.name}#status")
+        self.popup.add(self.status)
+        self.actions = Widget("panel", {"label": ""},
+                              name=f"{self.popup.name}#actions")
+        self.popup.add(self.actions)
+        pad(self.actions, 0.0)
+        # the row divides itself: the same equal share the arithmetic in
+        # :meth:`_frame` writes by hand, so a panel that has never seen a layout
+        # pass and one that has put Apply, Rescan and Cancel in three equal boxes
+        hstack(self.actions, BUTTON_GAP)
+
+        #: where a drag left the panel, or ``None`` for "under the row that opened
+        #  it" - which is where it goes again the next time the menu is used
+        self._placed: Optional[tuple] = None
+        #: the pointer's position while the title is being held down
+        self._held: Optional[tuple] = None
 
         self.blocks: List[dict] = []
         for index, field in enumerate(self.fields):
-            block = self._build_field(index, field, left, top, inner)
+            # every block is measured inside the body's content: the rows the
+            # wheel slides are not measured against the panel's own corner
+            block = self._build_field(index, field, 0.0, top, self._inner())
             if block is None:
                 continue
             self.blocks.append(block)
@@ -463,12 +518,7 @@ class MenuDialog:
 
         # the action row: Apply, then whatever else the bindings asked for -
         # the buttons share the row, each as wide as the others
-        self.status = Widget("text", {"label": "", "role": "caption"},
-                             name=f"{self.popup.name}#status")
-        self.popup.add(self.status)
-        self.status.place(left, top, inner, CAPTION_HEIGHT)
-        top += CAPTION_HEIGHT + 2.0
-        self.actions: List[Widget] = []
+        self.action_buttons: List[Widget] = []
         self.extra_buttons: List[tuple] = []
         wanted = [("Apply", self._apply_now)]
         for extra in (buttons or ()):
@@ -485,15 +535,191 @@ class MenuDialog:
             else:
                 label, fn = extra
                 wanted.append((str(label), fn))
-        self._action_row(wanted, left, top, inner)
-        top += APPLY_HEIGHT
+        self._action_row(wanted)
 
-        height = min(DIALOG_MAX_HEIGHT, top + POPUP_PAD)
-        if DIALOG_MAX_HEIGHT < top + POPUP_PAD:
-            # the panel stopped growing; every list re-measured inside it takes
-            # the overflow on its own wheel instead of running off the window
-            height = self._fit_lists(DIALOG_MAX_HEIGHT)
-        self.popup.place(menu.button.x, BAR_HEIGHT, DIALOG_WIDTH, height)
+        self._glue()
+        self._wire_drag()
+        self._watch_resize()
+        self._frame()
+
+    # -- the panel's own geometry ----------------------------------------
+    def _wide(self) -> float:
+        """How wide the page may be: the window's, less a margin, in a band.
+
+        ``DIALOG_WIDTH`` is the width a page *asks* for and ``DIALOG_MAX_WIDTH``
+        the widest it is allowed to become, because a settings column a metre
+        across is one word per line with the rest of it empty. What a narrow
+        window has left wins in the other direction: the page ends inside the
+        client rect whatever the window's own width happens to be.
+        """
+        room = max(0.0, float(self.ctx.width) - 2 * DIALOG_MARGIN)
+        wanted = min(DIALOG_MAX_WIDTH, max(DIALOG_WIDTH, room))
+        return max(0.0, min(room, wanted))
+
+    def _inner(self) -> float:
+        """The width one row of the page gets: the panel's less both margins."""
+        return max(0.0, self._wide() - 2 * POPUP_PAD)
+
+    def _natural(self) -> float:
+        """The height the page would take if nothing were clipped away."""
+        content = max(MIN_BODY_HEIGHT, measure(self.body)[0])
+        return (POPUP_PAD + TITLE_HEIGHT + ROW_GAP + content + ROW_GAP
+                + CAPTION_HEIGHT + 2.0 + APPLY_HEIGHT + POPUP_PAD)
+
+    def _corner(self, width: float, height: float) -> Tuple[float, float]:
+        """Where the panel goes: under its menu row, or wherever it was dragged.
+
+        Clamped on the way, so a page thrown at a window corner stops at the edge
+        rather than ending half out of the window: the room it is given and the
+        room it is drawn in are the same rectangle.
+        """
+        ctx = self.ctx
+        across = max(DIALOG_MARGIN,
+                     float(ctx.width) - float(width) - DIALOG_MARGIN)
+        down = max(DIALOG_MARGIN,
+                   float(ctx.height) - float(height) - DIALOG_MARGIN)
+        near = (float(self.menu.button.x) if self._placed is None
+                else float(self._placed[0]))
+        far = (BAR_HEIGHT + DIALOG_MARGIN if self._placed is None
+               else float(self._placed[1]))
+        return (min(max(near, DIALOG_MARGIN), across),
+                min(max(far, DIALOG_MARGIN), down))
+
+    def _frame(self) -> float:
+        """Size and place the panel from the window; the height it ended up with.
+
+        The numbers come out of ``ctx.width``/``ctx.height`` rather than from a
+        height this class decides for itself, and they are *also* written as
+        anchors (:meth:`_glue`) - the same answer twice on purpose, because most
+        of what builds a dialog never runs a layout pass. The panel is the room
+        the window leaves with a margin off it, capped at the height a form is
+        worth having; what the cap takes away comes off the *page* and not off
+        the bottom of the screen, because the body is a scroll area and the two
+        rows under it are measured inwards from the panel's far edge.
+        """
+        width = self._wide()
+        top = BAR_HEIGHT + DIALOG_MARGIN
+        room = max(0.0, float(self.ctx.height) - top - DIALOG_MARGIN)
+        height = max(0.0, min(room, min(DIALOG_MAX_HEIGHT,
+                                        max(MIN_DIALOG_HEIGHT,
+                                            self._natural()))))
+        x, y = self._corner(width, height)
+        if self._placed is not None:
+            # a drag that ran past the edge is remembered at the edge, so the next
+            # resize neither loses it nor invents a place nobody asked for
+            self._placed = (x, y)
+        self.popup.place(x, y, width, height)
+        across = max(0.0, width - 2 * POPUP_PAD)
+        self.title_widget.place(POPUP_PAD, POPUP_PAD, across, TITLE_HEIGHT)
+        actions_y = max(0.0, height - POPUP_PAD - APPLY_HEIGHT)
+        status_y = max(0.0, actions_y - 2.0 - CAPTION_HEIGHT)
+        body_top = POPUP_PAD + TITLE_HEIGHT + ROW_GAP
+        self.body.place(0.0, body_top, width,
+                        max(MIN_BODY_HEIGHT, status_y - ROW_GAP - body_top))
+        self.status.place(POPUP_PAD, status_y, across, CAPTION_HEIGHT)
+        self.actions.place(POPUP_PAD, actions_y, across, APPLY_HEIGHT)
+        count = max(1, len(self.action_buttons))
+        cell = max(0.0, (across - (count - 1) * BUTTON_GAP) / count)
+        for position, button in enumerate(self.action_buttons):
+            button.place(position * (cell + BUTTON_GAP), 0.0, cell,
+                         APPLY_HEIGHT)
+        # the rows are where they are, so the body can finally be told what it is
+        # showing: its content, its travel, and the offset clamped between the two
+        reconcile(self.body)
+        return height
+
+    def _glue(self) -> None:
+        """Write the page's geometry a second time, in edges.
+
+        Every offset here is the number :meth:`_frame` placed the same row at, so
+        the hand and the glue cannot disagree; what the glue adds is the frame
+        after a window resize - the body stretched between the title's bottom and
+        the caption's top, the caption and the buttons holding their distance from
+        the panel's bottom edge, and the scroll band left as exactly the room
+        between them, which is :meth:`_frame` again without another loop over the
+        rows. A row glued to the panel is glued to the space the panel gives its
+        children, which here is its whole box: the padding is written by hand.
+        """
+        anchor(self.title_widget, "left", offset=POPUP_PAD)
+        anchor(self.title_widget, "right", offset=-POPUP_PAD)
+        anchor(self.title_widget, "top", offset=POPUP_PAD)
+        anchor(self.body, "left")
+        anchor(self.body, "right")
+        anchor(self.body, "top", self.title_widget, "bottom", ROW_GAP)
+        anchor(self.body, "bottom", self.status, "top", -ROW_GAP)
+        anchor(self.status, "left", offset=POPUP_PAD)
+        anchor(self.status, "right", offset=-POPUP_PAD)
+        anchor(self.status, "bottom", self.actions, "top", -2.0)
+        anchor(self.actions, "left", offset=POPUP_PAD)
+        anchor(self.actions, "right", offset=-POPUP_PAD)
+        anchor(self.actions, "bottom", offset=-POPUP_PAD)
+
+    def _wire_drag(self) -> None:
+        """Let the title be grabbed: the page moves and its contents follow.
+
+        The router already owns the gesture for the whole of it - the widget under
+        the press ``capture``s the pointer, so a title drag cannot leak into a row
+        the pointer happens to pass over - and the kind's own ``on_event`` slot is
+        chained onto rather than replaced, the way a menu row chains the toggle it
+        found, so a script that gave the title an ``ON_CLICK`` still gets it.
+        Nothing is stored but the corner: :meth:`move` is the one place a panel is
+        allowed to be put, and an anchored child needs no second half of the
+        gesture because the glue reads the panel every frame.
+        """
+        previous = self.title_widget.on_event
+
+        def on_event(widget, name, *args, _prev=previous) -> None:
+            if callable(_prev):
+                _prev(widget, name, *args)
+            try:
+                said = event_name(name)
+            except Exception:
+                return
+            if said == "press" and len(args) >= 3 and not int(args[2] or 0):
+                self._held = (float(args[0]), float(args[1]))
+            elif said == "drag" and self._held is not None and len(args) >= 2:
+                self.move(self.popup.x + float(args[0]),
+                          self.popup.y + float(args[1]))
+            elif said in ("release", "click"):
+                self._held = None
+
+        self.title_widget.on_event = on_event
+
+    def move(self, x: Any, y: Any) -> Tuple[float, float]:
+        """Put the panel's corner at ``x, y``, kept in the window; where it went.
+
+        A drag and a re-open both answer through here, so "where the page is" is
+        one fact with one clamp rather than a rule each.
+        """
+        self._placed = (float(x), float(y))
+        self._frame()
+        return self._placed
+
+    def _watch_resize(self) -> None:
+        """Re-measure the page when the window it hangs in changes size.
+
+        The anchors do the rows, but the panel's own height is a ``min`` of the
+        room the window leaves and the height a form is worth, which no pair of
+        glued edges can say - so the one number the glue cannot answer is asked
+        for directly, and the answer stops being asked for the moment the panel
+        has left the tree.
+
+        The event's own name comes as a third argument, the way every registration
+        on this bridge is called, so the slot takes it rather than raising: a
+        handler that fails here is logged by the bridge and muted, and a dialog
+        whose page stopped following the window would be the silent version of that
+        bug.
+        """
+        ctx = self.ctx
+        root = ctx.root
+
+        def on_resize(width, height, *said) -> None:
+            if self.popup.parent is not root:
+                ctx.handlers.remove(root, "resize", on_resize)
+                return
+            self._frame()
+
+        ctx.handlers.add(root, "resize", on_resize)
 
     # -- building one field -------------------------------------------------
     def _caption(self, text: str, left: float, top: float, inner: float,
@@ -503,13 +729,22 @@ class MenuDialog:
             return top, None
         label = Widget("text", {"label": text},
                        name=f"{self.popup.name}#label{tag}")
-        self.popup.add(label)
+        self.body.add(label)
         label.place(left, top, inner, CAPTION_HEIGHT)
+        # the width is the row's to keep when the page is given more of it: the
+        # caption is glued across the body by the pack policy below and placed at
+        # the same full width by hand, so both answers are the one number
+        pack(label, "fill", "fixed")
         return top + CAPTION_HEIGHT, label
 
     def _build_field(self, index: int, field: dict, left: float, top: float,
                     inner: float) -> Optional[dict]:
-        """Build one field's block at ``top``; its record with the y it ended at."""
+        """Build one field's block at ``top``; its record with the y it ended at.
+
+        The block is built inside the body, so ``left``/``inner`` are measured from
+        the edge of the content the wheel slides and ``top`` is a place in that
+        content rather than a place in the window.
+        """
         kind = str(field.get("kind", "dropdown"))
         if kind == "section":
             bottom, label = self._caption(str(field.get("label", "")), left,
@@ -520,8 +755,9 @@ class MenuDialog:
             control = Widget("toggle", {"label": str(field.get("label", "")),
                                        "value": 1 if field.get("value") else 0},
                              name=f"{self.popup.name}#toggle{index}")
-            self.popup.add(control)
+            self.body.add(control)
             control.place(left, top, inner, FIELD_HEIGHT)
+            pack(control, "fill", "fixed")
             self.controls[index] = control
             return {"index": index, "kind": kind, "control": control,
                     "label": None, "y": top, "bottom": top + FIELD_HEIGHT}
@@ -561,36 +797,49 @@ class MenuDialog:
                 "value": int(field.get("value", 0)),
             }, name=f"{self.popup.name}#choice{index}")
             self.payloads[index] = list(field.get("payloads", ()) or ())
-        self.popup.add(control)
+        self.body.add(control)
         control.place(left, y, inner, FIELD_HEIGHT)
+        pack(control, "fill", "fixed")
         self.controls[index] = control
         return y + FIELD_HEIGHT, label, control
 
     def _build_button_grid(self, index: int, field: dict, left: float,
                            top: float, inner: float) -> dict:
-        """A quick-set grid: ``labels`` across ``columns`` rows of equal buttons."""
+        """A quick-set grid: ``labels`` across ``columns`` rows of equal buttons.
+
+        The cells are the layout engine's to divide: one holder panel across the
+        body's width, arranged by :func:`~crude.ui.layout.grid`, is the same
+        answer the per-button arithmetic used to be - and it is the answer that
+        re-cells itself when the page is made wider, which a hand-divided row of
+        fixed cells is not. The buttons fill their cells, so the row heights stay
+        ``FIELD_HEIGHT`` and only the widths move with the panel.
+        """
         y, label = self._caption(str(field.get("label", "")), left, top, inner,
                                  str(index))
         labels = [str(text) for text in (field.get("labels", ()) or ())]
         columns = max(1, int(field.get("columns", 4)))
-        rows = (labels + [""] * (-len(labels) % columns)) \
-            if labels else []
+        rows = (len(labels) + columns - 1) // columns if labels else 0
+        height = rows * (FIELD_HEIGHT + BUTTON_GAP) - BUTTON_GAP if rows else 0.0
+        holder = Widget("panel", {"label": ""},
+                        name=f"{self.popup.name}#cells{index}")
+        self.body.add(holder)
+        pad(holder, 0.0)
+        grid(holder, columns, gap=BUTTON_GAP)
+        holder.place(left, y, inner, max(0.0, height))
+        pack(holder, "fill", "fixed")
         buttons: List[Widget] = []
-        cell = (inner - (columns - 1) * BUTTON_GAP) / columns
-        for position, text in enumerate(rows):
-            if not text:
-                continue
+        cell = (inner - (columns - 1) * BUTTON_GAP) / columns if labels else 0.0
+        for position, text in enumerate(labels):
             button = Widget("button", {"label": text},
                             name=f"{self.popup.name}#quick{index}-{position}")
-            self.popup.add(button)
+            holder.add(button)
             row, column = divmod(position, columns)
-            button.place(left + column * (cell + BUTTON_GAP),
-                         y + row * (FIELD_HEIGHT + BUTTON_GAP),
+            button.place(column * (cell + BUTTON_GAP),
+                         row * (FIELD_HEIGHT + BUTTON_GAP),
                          cell, FIELD_HEIGHT)
+            pack(button, "fill", "fill")
             self._wire_quick(button, field, position)
             buttons.append(button)
-        height = ((len(rows) + columns - 1) // columns) * (FIELD_HEIGHT + BUTTON_GAP) \
-            - BUTTON_GAP if rows else 0.0
         return {"index": index, "kind": "buttons", "buttons": buttons,
                 "label": label, "y": top, "bottom": y + max(0.0, height)}
 
@@ -613,105 +862,36 @@ class MenuDialog:
 
     def _build_list(self, index: int, field: dict, left: float, top: float,
                     inner: float) -> dict:
-        """A scrollable column of per-device toggles inside a clipped viewport."""
+        """A scrollable column of per-device toggles: the ``scroll`` kind itself.
+
+        What this class used to keep by hand - a viewport, an inner panel, an
+        offset, a travel recomputed on every rebuild - is one widget of the catalog
+        now: the rows go to the viewport's own content, the wheel writes its
+        ``offset`` prop, and its ``travel`` is the measure of the two boxes. The
+        viewport's padding is the margin the rows used to be inset by, which is why
+        the travel that comes out of it is the number the dialog used to work out.
+        Nothing is chained onto the widget's ``on_event`` here: the kind already
+        answers a wheel, and a second answer would move the list twice.
+        """
         y, label = self._caption(str(field.get("label", "")), left, top, inner,
                                  str(index))
-        viewport = Widget("panel", {"label": ""},
+        viewport = Widget("scroll", {"label": ""},
                           name=f"{self.popup.name}#list{index}")
-        self.popup.add(viewport)
+        self.body.add(viewport)
+        # the inset first and the box second, because the padding is measured into
+        # the resolved box: placed first, the viewport would report a content the
+        # margin has never been taken off and a travel too big by twice the pad
+        pad(viewport, POPUP_PAD)
+        pack(viewport, "fill", "fixed")
         viewport.place(left, y, inner, LIST_VIEW_HEIGHT)
-        pad(viewport, 0.0)
-        inner_panel = Widget("panel", {"label": ""},
-                             name=f"{viewport.name}#rows")
-        viewport.add(inner_panel)
-        inner_panel.place(0.0, 0.0, inner - 2 * POPUP_PAD, 0.0)
-        state = {"viewport": viewport, "inner": inner_panel, "rows": [],
-                 "offset": 0.0, "field": field, "y": top}
+        state = {"viewport": viewport, "inner": viewport.content_child,
+                 "rows": [], "offset": 0.0, "travel": 0.0, "field": field,
+                 "y": top}
         self.lists[index] = state
         self._rebuild_rows(index)
-        # the wheel chains onto the viewport's own slot; a paper test can call
-        # scroll() directly, and a live router hands it to the hovered widget
-        previous = viewport.on_event
-
-        def on_event(widget, name, *args, _prev=previous, _state=state) -> None:
-            if callable(_prev):
-                _prev(widget, name, *args)
-            if event_name(name) == "scroll" and len(args) >= 2:
-                self.scroll_to(index, float(args[1]))
-
-        viewport.on_event = on_event
         self.payloads[index] = list(field.get("payloads", ()) or ())
         return {"index": index, "kind": "list", "y": top, "label": label,
                 "bottom": y + LIST_VIEW_HEIGHT, "control": None}
-
-    def _fit_lists(self, limit: float) -> float:
-        """Squeeze the lists so the panel ends at ``limit``; the height it got.
-
-        The overflow only ever comes from device lists - every other row is one
-        fixed line - so the lists share the squeeze, and each keeps a couple of
-        visible rows at minimum. Blocks after the last shrunk list slide up with
-        their saved gap, and a list's own travel is re-measured because a shorter
-        window means more wheel to reach the bottom of the same devices.
-        """
-        states = [block for block in self.blocks
-                  if block.get("kind") == "list"]
-        if not states:
-            return limit
-        for block in self.blocks:
-            block.setdefault("height", block["bottom"] - block["y"])
-        # everything that is not a list's view is a line of its own: the panel's
-        # padding, the title, a gap above and after every block, the status line
-        # and the action row - plus a list's caption, which never shrinks. Counting
-        # a squeezed list as caption+view instead of the full view it was built
-        # with is what keeps the panel from ending up taller than the cap.
-        fixed = (2 * POPUP_PAD + TITLE_HEIGHT + CAPTION_HEIGHT + 2.0
-                 + APPLY_HEIGHT + ROW_GAP * (len(self.blocks) + 1)
-                 + sum(block["height"] for block in self.blocks
-                       if block.get("kind") != "list")
-                 + CAPTION_HEIGHT * len(states))
-        room = max(MIN_LIST_VIEW * len(states), limit - fixed)
-        share = max(MIN_LIST_VIEW, room / len(states))
-        for block in states:
-            state = self.lists[block["index"]]
-            state["viewport"].place(None, None, None, share)
-            # the caption stays where it was and only the view shrinks, so the
-            # block's height becomes the two of them added - and the re-stack
-            # below reads that height from each block's new top
-            block["height"] = CAPTION_HEIGHT + share
-            content = max(0.0, len(state["rows"]) * LIST_ROW_HEIGHT
-                          - (share - 2 * POPUP_PAD))
-            state["travel"] = content
-        # re-stack every block with the (possibly shrunk) heights and move the
-        # widgets themselves - the record and the screen must say the same thing
-        y = POPUP_PAD + TITLE_HEIGHT + ROW_GAP
-        for block in self.blocks:
-            slide = y - block["y"]
-            if slide:
-                self._slide(block, slide)
-            block["y"] = y
-            block["bottom"] = y + block["height"]
-            y = block["bottom"] + ROW_GAP
-        self.status.place(None, y, None, None)
-        y += CAPTION_HEIGHT + 2.0
-        for button in self.actions:
-            button.place(None, y, None, None)
-        return y + APPLY_HEIGHT + POPUP_PAD
-
-    def _slide(self, block: dict, delta: float) -> None:
-        """Move one finished block's own widgets down (or up) by ``delta``."""
-        label = block.get("label")
-        if label is not None:
-            label.place(None, label.y + delta, None, None)
-        if block.get("kind") == "list":
-            state = self.lists[block["index"]]
-            viewport = state["viewport"]
-            viewport.place(None, viewport.y + delta, None, None)
-            return
-        control = block.get("control")
-        if control is not None:
-            control.place(None, control.y + delta, None, None)
-        for button in block.get("buttons", ()):
-            button.place(None, button.y + delta, None, None)
 
     def _rebuild_rows(self, index: int) -> None:
         """One toggle per entry, stacked in the inner panel; selections kept.
@@ -757,24 +937,34 @@ class MenuDialog:
                             name=f"{state['viewport'].name}#row{position}")
             state["inner"].add(toggle)
             toggle.place(0.0, position * LIST_ROW_HEIGHT, width, LIST_ROW_HEIGHT)
+            # a row keeps the viewport's whole width when the page is widened: the
+            # content panel is glued to it, and a device name should not have to be
+            # re-placed by hand to use the room a bigger window gave the list
+            pack(toggle, "fill", "fixed")
             state["rows"].append((position, toggle))
-        content = max(0.0, len(labels) * LIST_ROW_HEIGHT
-                      - (state["viewport"].height - 2 * POPUP_PAD))
-        state["travel"] = content
-        self.scroll_to(index, 0.0)
+        # the viewport measures itself: content, travel, the clamped offset, and
+        # the content panel's own box - all four from the rows that are in it now
+        _content, travel = reconcile(state["viewport"])
+        state["travel"] = travel
+        state["offset"] = float(state["viewport"].get("offset") or 0.0)
 
     # -- scrolling one list --------------------------------------------------
     def scroll_to(self, index: int, delta: float) -> float:
-        """Slide a list's rows by ``delta`` notches; the offset it landed at."""
+        """Slide a list's rows by ``delta`` notches; the offset it landed at.
+
+        The arithmetic is the scroll area's now - one notch is the widget's own
+        ``notch`` prop, left at the two rows a wheel step used to move, and the
+        clamp to ``[-travel, 0]`` is the prop write inside
+        :func:`crude.ui.scroll.slide`. The verb stays because the bindings and the
+        dialog's own tests call it, and because ``offset`` is the number they are
+        asking about either way.
+        """
         state = self.lists.get(index)
         if state is None:
             return 0.0
-        travel = state.get("travel", 0.0)
-        # one notch is a few rows; the sign is the wheel's own (down scrolls up
-        # the content, which means the rows slide down the window)
-        offset = state["offset"] + float(delta) * LIST_ROW_HEIGHT * 2.0
-        state["offset"] = min(0.0, max(-travel, offset))
-        state["inner"].place(None, POPUP_PAD + state["offset"], None, None)
+        viewport = state["viewport"]
+        state["offset"] = scroll_by(viewport, float(delta))
+        state["travel"] = float(viewport.get("travel") or 0.0)
         return state["offset"]
 
     def list_selection(self, index: int) -> List[Any]:
@@ -790,16 +980,26 @@ class MenuDialog:
         return out
 
     # -- the action row -------------------------------------------------------
-    def _action_row(self, wanted, left: float, top: float, inner: float) -> None:
-        """Place Apply and the extra buttons, sharing the row evenly."""
+    def _action_row(self, wanted) -> None:
+        """Apply and the extra buttons, sharing the row evenly, in their own panel.
+
+        The row is the panel :meth:`_frame` measures against the page's width and
+        :meth:`_glue` pins to the page's bottom edge: a settings panel that grew
+        an inch keeps its buttons one inch further down rather than gaining a
+        band of empty plate under them.
+        """
+        inner = self._inner()
         count = max(1, len(wanted))
         cell = (inner - (count - 1) * BUTTON_GAP) / count
         for position, (label, fn) in enumerate(wanted):
             button = Widget("button", {"label": label},
                             name=f"{self.popup.name}#{label.lower()}")
-            self.popup.add(button)
-            button.place(left + position * (cell + BUTTON_GAP), top,
+            self.actions.add(button)
+            button.place(position * (cell + BUTTON_GAP), 0.0,
                          cell, APPLY_HEIGHT)
+            # the even share is the same one ``HSTACK`` divides when a pass runs:
+            # every button fills, so the slack is split straight down the middle
+            pack(button, "fill", "fixed")
             previous = button.on_event
 
             def on_event(widget, name, *args, _prev=previous, _fn=fn) -> None:
@@ -809,7 +1009,7 @@ class MenuDialog:
                     _fn()
 
             button.on_event = on_event
-            self.actions.append(button)
+            self.action_buttons.append(button)
             if fn is not self._apply_now and fn is not self._cancel_now:
                 self.extra_buttons.append((label, fn))
 
@@ -841,10 +1041,18 @@ class MenuDialog:
         return bool(self.popup.get("visible"))
 
     def open(self) -> "MenuDialog":
-        """Re-read the fields and raise the panel over the window."""
+        """Re-read the fields and raise the panel under the row that opened it.
+
+        The panel is measured again on the way: a window that changed size since
+        the last time this menu was used gets the page it has room for now. A
+        place a person dragged the page to is forgotten here, because "open the
+        audio settings" has exactly one answer a pointer should not have to find
+        again - and the row the menu is hanging under is that answer.
+        """
         self.refresh()
         self.menu.bar.close_all()
-        self.popup.place(self.menu.button.x, BAR_HEIGHT, None, None)
+        self._placed = None
+        self._frame()
         self.popup.raise_to_top()
         self.popup.set("visible", True)
         return self
@@ -959,6 +1167,11 @@ class MenuDialog:
                     if self._says(index, field):
                         self._write(index, control, int(field.get("value", 0)))
                     self.payloads[index] = list(field.get("payloads", ()) or ())
+        # a list that grew is a page that got longer, and a page that got longer
+        # may no longer fit the room the window gives it: the body is re-measured
+        # against the rows it has now, so the thumb and the travel say what is
+        # there rather than what was there when the panel was first built
+        self._frame()
         return self
 
     def _control_for(self, index: int) -> Optional[Widget]:

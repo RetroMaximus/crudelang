@@ -31,6 +31,7 @@ import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .geometry import TAU, Point, TEXT_HEIGHT, clamp
+from .scroll import thumb_rect
 from .skin import Skin
 
 __all__ = ["FACES", "Face", "face_for"]
@@ -292,6 +293,32 @@ def _draw_logview(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
             break
         renderer.text(left, top + slot * line_h, rows[index], found.font,
                       found.ink, align="left")
+    return renderer.op_count - before
+
+
+def _draw_scroll(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """A viewport's thumb: one bar in the track the content slides down.
+
+    Nothing else is drawn, which is the whole point of the face: the rows are the
+    widget's children and paint themselves through the tree, the plate is what
+    ``base_face`` already gave the panel, and a scroll area that also drew a track
+    would be a frame inside a frame. The thumb is missing when the content fits - a
+    bar that cannot move is not information - and is missing when ``bar`` is off,
+    which leaves the wheel and the keys working on a viewport that simply has no
+    decoration on it.
+
+    The rect comes from :func:`~crude.ui.scroll.thumb_rect`, the same function the
+    gesture tests a press against, so the mark a hand can grab is exactly the mark
+    the eye was shown and the two cannot drift apart between builds.
+    """
+    before = renderer.op_count
+    if not widget.get("bar"):
+        return 0
+    held = thumb_rect(widget)
+    if held is None:
+        return 0
+    renderer.rect(held[0], held[1], held[2], held[3],
+                  skin.resolve("thumb").fill)
     return renderer.op_count - before
 
 
@@ -709,6 +736,9 @@ FACES: Dict[str, Face] = {
     "meter": _draw_meter,
     "radio": _draw_radio,
     "knob": _draw_knob,
+    # a viewport is a panel with a mark on it: the plate and the clip come from the
+    # base face and this only answers the thumb
+    "scroll": _draw_scroll,
 }
 
 

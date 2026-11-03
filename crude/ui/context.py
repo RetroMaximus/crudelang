@@ -46,11 +46,13 @@ from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import RGBA, Renderer, UIError
+from .behaviour import behaviour_for
 from .geometry import scale_of
 from .handlers import Handlers
 from .input import InputRouter
 from .layout import describe_layout, resolve
 from .null_renderer import NullRenderer
+from .scroll import content_of, restack, travel_of
 from .skin import Skin
 from .widget import Widget, root_panel, top_at
 
@@ -183,7 +185,8 @@ class UIContext:
         self.swap: Optional[Callable[[], Any]] = swap
         #: what the pointer means, aimed at this tree's own hit test
         self.router = InputRouter(self.hit, width=self.width,
-                                  height=self.height, root=self.root)
+                                  height=self.height, root=self.root,
+                                  scroll_owner=self.wheel_target)
         #: the script's side of every widget: several handlers per event, the
         #  ``LINK_*`` plumbing that runs before them, and the ``ON_FRAME`` list
         self.handlers = Handlers(name=self.name)
@@ -226,9 +229,27 @@ class UIContext:
         The count is the interesting part on an idle frame: zero means nothing was
         rewritten, which is what a script painter's cache (S7's ``PaintList``) keys
         its honesty on.
+
+        A viewport is settled after the pass rather than inside it: a scroll area's
+        ``content`` and ``travel`` are answers about where its rows ended up, so
+        asking them before the arrangement would report the frame before this one,
+        and asking them during a paint would have the draw pass write props. The
+        two numbers only ever move when the content does, so an idle frame costs a
+        walk and nothing else.
+
+        A new client rect is answered here as well as by the queued resize event:
+        when the root's box and the window's rect disagree, the root is told before
+        the pass runs, so whatever a *layer* above the tree places by hand - a
+        settings dialog that sizes itself to the window - gets its chance to re-decide
+        in the same frame the size changed. A GLFW resize arrives through
+        :meth:`dispatch` first and so is not said twice: that pass leaves the root at
+        the rect the context already has.
         """
+        if (self.root.width, self.root.height) != (self.width, self.height):
+            self.root.on_resize(self.width, self.height)
         moved = resolve(self.root, self.skin, width=self.width,
                         height=self.height, dpr=self.grid)
+        restack(self.root)
         self.moved = moved
         # the tree may have moved under a pointer that did not
         self.router.rehover()
@@ -365,6 +386,46 @@ class UIContext:
     def hit(self, x: float, y: float) -> Optional[Widget]:
         """The topmost widget at a point of the window: the router's hit test."""
         return top_at(self.root, float(x), float(y))
+
+    def takes_wheel(self, held: Any) -> bool:
+        """Whether a wheel is *this* widget's to answer, rather than a box's.
+
+        Two sources of an answer, in the order they are written down: the kind's own
+        gesture table (:data:`~crude.ui.behaviour.BEHAVIOURS`), and a script's
+        ``ON_SCROLL`` on this particular widget. A viewport that has run out of
+        content to slide is then refused rather than skipped, because a box that
+        cannot move has no use for the gesture and the person's wheel is meant for
+        whoever does - a short list inside a settings page that is itself too tall
+        for the window has to leave the wheel to the page.
+        """
+        if held is None:
+            return False
+        if behaviour_for(held.kind).get("on_scroll") is None:
+            return self.handlers.count(held, "scroll") > 0
+        if content_of(held) is not None:
+            return travel_of(held) > 0.0
+        return True
+
+    def wheel_target(self, held: Any) -> Any:
+        """The widget the wheel belongs to: the one hit, or the nearest box that scrolls.
+
+        Every other gesture goes to the widget under the pointer, and that is right
+        for a wheel too - until the widget under the pointer is a *row*. A device
+        list is a column of toggles laid over the viewport they all live in, so a
+        router that stopped at the toggle would leave the list scrollable only on the
+        few pixels of its plate no row covers, which is not a scroll area. So the
+        question is asked of this tree, where the kinds and the registrations are
+        both known, and it walks outward: the first ancestor that can move answers.
+
+        Left as ``None`` for a router with no tree to ask, the wheel stays where the
+        pointer is.
+        """
+        node = held
+        while node is not None:
+            if self.takes_wheel(node):
+                return node
+            node = getattr(node, "parent", None)
+        return held
 
     @property
     def hover(self) -> Optional[Widget]:

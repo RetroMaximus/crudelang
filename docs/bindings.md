@@ -215,7 +215,7 @@ SLIDER(label, lo, hi, value)   VSLIDER(...)   NUMBER(label, lo, hi, value)
 METER(label, lo, hi, value)    RADIO(values)   DROPDOWN(values)
 PANEL(title)   XY_PAD(label, x, y)   KEYBED(label, low, octaves)   ADSR(...)   CURVE(...)
 SPECTRUM       WAVEFORM         PLOT(label)         LOGVIEW(label)
-PRESET_BAR(...)   PANEL(...)
+PRESET_BAR(...)   PANEL(...)   SCROLL(label)
 ```
 
 Placement and layout:
@@ -301,17 +301,23 @@ the initial tick. Opening one popup closes whichever was open, and a closed
 popup paints nothing, so the bar costs only its titles until it is clicked.
 
 Three of the rows are ready-made configuration dialogs, so picking the item
-opens a small panel of controls with one `Apply` button rather than running a
+opens a page of controls with one `Apply` button rather than running a
 bare callback. `MENU_AUDIO_DIALOG(menu[, title])` lists the audio runtime's
-input and output ports as two `DROPDOWN`s and, on Apply, switches the running
-stream onto the picked device indices - exactly what `AUDIO_USE_DEVICES` does.
-`MENU_MIDI_DIALOG(menu[, title])` lists the MIDI ports per direction and opens
-the pick with `MIDI_OPEN`. `MENU_SERIAL_DIALOG(menu, link[, title])` shows one
-`NUMBER` seeded at a link's current rate and applies `SET(link, "baud", n)`.
+input and output ports as two scrollable columns of `TOGGLE`s - a device is
+picked by its row and switched off by the same row - and, on Apply, switches
+the running stream onto the picked device indices - exactly what
+`AUDIO_USE_DEVICES` does. `MENU_MIDI_DIALOG(menu[, title])` lists the MIDI
+ports per direction and opens the pick with `MIDI_OPEN`. `MENU_SERIAL_DIALOG(menu,
+link[, title])` shows one `NUMBER` seeded at a link's current rate and applies
+`SET(link, "baud", n)`.
 The ports are read only when a panel opens, never when the menu is built, so a
 project with no sound card, no MIDI library and no serial cable still builds its
-menu and runs headless; with no runtime the dropdown shows one disabled
+menu and runs headless; with no runtime the list shows one disabled
 `(no devices)` row and applying does nothing.
+
+Each page is sized from the window it is opened in, keeps its `Apply` row at the
+bottom and scrolls the rest (`widgets.md`, "Menus and dialogs"), so a small
+window shows a whole dialog rather than a cut-off one.
 
 ## Common handle calls
 

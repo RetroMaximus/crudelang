@@ -31,7 +31,7 @@ Widget {
 Every constructor the catalog names - `TEXT`, `BUTTON`, `SLIDER`,
 `TOGGLE`, `METER`, `NUMBER`, `VSLIDER`, `RADIO`, `DROPDOWN`, `XY_PAD`,
 `KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PLOT`, `LOGVIEW`,
-`PRESET_BAR`, `PANEL`, `ICON` - builds one `Widget` and returns a
+`PRESET_BAR`, `PANEL`, `SCROLL`, `ICON` - builds one `Widget` and returns a
 `HostHandle(kind="widget")` the script holds onto. `WIDGET(kind, ...)` is
 the generic form every catalog helper wraps, and it is how a kind with no
 sugar word of its own is built - `WIDGET("logview")` and `WIDGET("plot")`
@@ -200,6 +200,51 @@ script feeds them from `ON_FRAME`:
 they reach the same `GET`/`SET` schema as the rest of the catalog but are
 never emitted to a `.pd` file.
 
+## The scroll area
+
+`SCROLL(label)` (or `WIDGET("scroll")`) is a `panel` that slides what is
+inside it. Its own box never moves; the children go to one inner panel -
+the widget's `content_child`, named `"{name}#rows"` - and that panel is
+moved, so `NODE_ADD(s, w)` on a scroll area puts `w` in the content rather
+than in the frame and everything the frame owes a child still holds: the
+clip, the hit test, the tree walk and the paint order.
+
+| Prop       | Read as                                              |
+| ---------- | ---------------------------------------------------- |
+| `offset`   | pixels the content has been slid up; 0 shows the top, and it is never positive |
+| `content`  | the height the rows ask for - written by the layout pass, read-only for a script |
+| `travel`   | `content` minus the view, never less than zero; also read-only |
+| `bar`      | 1 draws the thumb along the right edge, 0 draws nothing and changes no gesture |
+| `notch`    | pixels one wheel notch slides; the default is two of the rows below |
+| `rows`     | the row height the thumb and the arrows are counted in |
+
+`offset` is the fact and the inner panel's box is its shadow: `SET(s,
+"offset", 0)` jumps to the newest row exactly as a hand on the wheel does,
+and the next layout pass re-clamps whatever a script wrote to the travel
+the rows actually have. `content` and `travel` answer themselves after the
+layout pass (`crude.ui.scroll.reconcile`, run over the whole tree by
+`restack`), which is why a script that wrote them would only be overwritten.
+
+Every gesture writes the one prop and is installed by the kind, so a script
+that registers `ON_SCROLL` of its own is chained after it rather than
+replacing it: the wheel moves `notch` a step, a drag on the thumb slides it
+from where it was grabbed, a click on the empty track pages towards the
+click, `PageUp`/`PageDown` move a view and `Up`/`Down` move one `rows`,
+`Home`/`End` go to the two ends. The wheel goes the log view's way, not a
+browser's: a notch pushed away from the person moves the window up the
+content, which is what the dialog's device lists and the `logview` above
+already do.
+
+A row the viewport has slid past its edge is neither drawn nor clickable:
+the clip that reaches it is empty, and `hit` refuses a point outside it, so
+a list cannot answer a click the person cannot see. This `scroll` is not the
+`logview`'s `scroll` prop - that one counts lines of text and belongs to a
+face that plots them; these are pixels.
+
+Like `plot` and `logview`, a viewport has no Pd twin: `pd_object` stays
+empty, `PD_EMIT` never writes one, and the role it inherits is `panel`,
+which keeps it out of the tab order.
+
 ## Menus and dialogs
 
 There is no native menu bar in this project's GLFW windows, so a running
@@ -223,15 +268,36 @@ a renderer, a window or a GPU to be tested. The `crude.ui.menu` classes hold
 the same behaviour for a host that would rather build a menu without the
 language.
 
-A settings dialog is the same parts: a popup `PANEL` holding a `DROPDOWN` per
-choice (its `labels` list is the option text, its `value` the chosen index) and
-a `BUTTON` that applies them - the `crude.ui.menu` `MenuDialog`, hung off a menu
-row by `Menu.add_dialog`. The shipped examples' File menu uses one each for
-audio devices (filled from `AUDIO_DEVICES`, applied with `AUDIO_USE_DEVICES`),
-MIDI ports (from `MIDI_DEVICES`, or one disabled row when the list is empty,
-applied with `MIDI_OPEN`) and a serial link's rate (`NUMBER` per link, applied
+A settings dialog is the same parts, and the `crude.ui.menu` `MenuDialog` -
+hung off a menu row by `Menu.add_dialog` - decides what size they are from the
+window it is opened in rather than from a constant. `DIALOG_WIDTH` and
+`DIALOG_MAX_HEIGHT` are what a page *prefers*; the height actually taken is the
+room between the menu bar and the client rect's bottom edge, held between
+`MIN_DIALOG_HEIGHT` and that preference and clamped so the panel always ends
+inside the window. A 240 px window therefore gets a page that fits in 240 px
+and a 900 px one gets the preferred height rather than a stretched box, and a
+`ctx.set_size` answer is the same arithmetic re-run: the status caption and the
+action row are anchored to the popup's bottom edge, so Apply / Rescan / Cancel
+stay at the bottom and the scrollable middle band is exactly the room left
+between them and the fields above.
+
+What is inside is one `SCROLL` body, so a long form is read with the wheel
+rather than cut off, and the device lists are `SCROLL`s of their own - one row
+per port, each a `TOGGLE` where a device may be switched on individually, as
+Pure Data's own Media settings do. `Menu.scroll_to(index, delta)` and
+`Menu.list_selection(index)` are the two doors a script and the tests still
+come through; they are thin shims over the widget now. Grabbing the title row
+moves the page - the popup is placed inside the client rect and re-clamped as
+it is dragged, and because the rows are anchored to the popup they follow it
+without a second arithmetic pass. A dragged page keeps its place until the menu
+row opens it again.
+
+The shipped examples use one dialog each for audio devices (filled from
+`AUDIO_DEVICES`, applied with `AUDIO_USE_DEVICES`), MIDI ports (from
+`MIDI_DEVICES`, or one disabled row when the list is empty, applied with
+`MIDI_OPEN`) and a serial link's rate (`NUMBER` per link, applied
 with `SET(link, "baud", n)`), plus Save / Load built from `PRESET_SAVE` and
-`PRESET_LOAD`. Each is opened by the one binding named for it, so the dropdowns
+`PRESET_LOAD`. Each is opened by the one binding named for it, so the lists
 are read from the runtime only when the panel opens and never at load.
 
 ## Pd-parity widgets

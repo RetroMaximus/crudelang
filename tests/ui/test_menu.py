@@ -27,8 +27,8 @@ from crude.lang import Program
 from crude.lang.values import HostHandle, List, Number, String
 from crude.ui import UIContext, Widget
 from crude.ui.menu import (
-    DIALOG_MAX_HEIGHT, LIST_ROW_HEIGHT, LIST_VIEW_HEIGHT, MenuBar, POPUP_PAD,
-    TITLE_HEIGHT,
+    APPLY_HEIGHT, DIALOG_MARGIN, DIALOG_MAX_HEIGHT, LIST_ROW_HEIGHT,
+    LIST_VIEW_HEIGHT, MenuBar, POPUP_PAD, TITLE_HEIGHT,
 )
 
 
@@ -444,8 +444,13 @@ def test_the_title_sits_at_the_top_of_the_panel(ctx):
                      "min": 1, "max": 192000, "value": 44100}])
     assert dialog.popup.get("label") == "" or str(dialog.popup.get("label")) == ""
     assert dialog.title_widget.y == POPUP_PAD
-    assert dialog.blocks[0]["y"] >= POPUP_PAD + TITLE_HEIGHT
     assert dialog.title_widget.get("role") == "title"
+    # the title is the only row measured from the panel's own corner: everything
+    # else is inside the body, at the edge of the content the wheel slides, and
+    # the body itself starts under the title
+    assert dialog.blocks[0]["y"] == 0.0
+    assert dialog.body.y >= POPUP_PAD + TITLE_HEIGHT
+    assert dialog.blocks[0]["label"].is_in(dialog.body)
 
 
 def test_a_list_field_answers_every_toggled_payload(ctx):
@@ -484,7 +489,9 @@ def test_a_list_scrolls_inside_its_viewport(ctx):
     assert travel == 10 * LIST_ROW_HEIGHT - (LIST_VIEW_HEIGHT - 2 * POPUP_PAD)
     offset = dialog.scroll_to(0, -1)
     assert offset < 0.0
-    assert dialog.lists[0]["inner"].y == POPUP_PAD + offset
+    # the content panel is placed *at* the offset prop, and the viewport's own
+    # padding is what insets it: the box and the number a script reads are one
+    assert dialog.lists[0]["inner"].y == offset
     for _ in range(20):                               # ... and the wheel clamps
         offset = dialog.scroll_to(0, -1)
     assert round(offset, 3) == round(-travel, 3)
@@ -493,8 +500,14 @@ def test_a_list_scrolls_inside_its_viewport(ctx):
     assert offset == 0.0, "scrolling back up stops at the first row"
 
 
-def test_the_dialog_stops_growing_and_the_lists_take_the_overflow(ctx):
-    """A tall settings page is capped; each device list keeps rows on screen."""
+def test_a_long_page_is_scrolled_rather_than_squeezed(ctx):
+    """Four device lists do not shrink: the body takes the overflow.
+
+    The dialog used to hand every list a smaller window when the page grew too
+    tall for the panel. A scroll area makes that unnecessary - each list keeps
+    the view it was built with, the panel still ends inside the window, and the
+    wheel reaches the rows the window has no room for.
+    """
     bar = MenuBar(ctx, "menu")
     dialog = bar.menu("Audio").add_dialog(
         "Devices",
@@ -505,10 +518,114 @@ def test_the_dialog_stops_growing_and_the_lists_take_the_overflow(ctx):
             "payloads": list(range(12))} for n in range(4)})
     dialog.open()
     assert dialog.popup.height <= DIALOG_MAX_HEIGHT
+    assert (dialog.popup.y + dialog.popup.height
+            <= ctx.height - DIALOG_MARGIN)
     for index in range(4):
-        height = dialog.lists[index]["viewport"].height
-        assert height >= 44.0, "a squeezed list still shows a couple of rows"
-        assert height < LIST_VIEW_HEIGHT
+        assert dialog.lists[index]["viewport"].height == LIST_VIEW_HEIGHT
+    content = float(dialog.body.get("content"))
+    travel = float(dialog.body.get("travel"))
+    assert travel > 0.0, "the page is longer than the room it was given"
+    assert travel == content - (dialog.body.height - 2 * POPUP_PAD)
+    # and the wheel answers for the page, not only for one list inside it
+    dialog.body.on_scroll(0.0, -3 * 16.0, 0)
+    assert dialog.body.get("offset") == max(-travel, -3 * 44.0)
+
+
+def test_a_small_window_gets_a_page_that_ends_inside_it():
+    """A 360x220 window: the panel is the room it was given, not a fixed box.
+
+    The regression this guards is the one a person sees first - a settings page
+    whose buttons are below the bottom edge of the screen, unreachable because
+    nothing in the dialog knew how tall the window was.
+    """
+    ctx = UIContext(width=360, height=220)
+    dialog = MenuBar(ctx, "menu").menu("Audio").add_dialog(
+        "Devices", [{"kind": "number", "label": "Rate", "min": 1,
+                     "max": 192000, "value": 44100}],
+        buttons=["Rescan", "Cancel"])
+    dialog.open()
+    assert dialog.popup.y + dialog.popup.height <= 220 - DIALOG_MARGIN
+    assert dialog.popup.x + dialog.popup.width <= 360 - DIALOG_MARGIN
+    # the row's own screen box, not its y inside the panel: what a person is
+    # asking is where the buttons are on the window
+    row = dialog.actions.screen_box
+    assert row[1] + row[3] == pytest.approx(
+        dialog.popup.y + dialog.popup.height - POPUP_PAD)
+
+
+def test_the_buttons_are_pinned_to_the_bottom_of_a_tall_page():
+    """A 900x700 window: the buttons sit at the panel's bottom, not its rows'."""
+    ctx = UIContext(width=900, height=700)
+    dialog = MenuBar(ctx, "menu").menu("Audio").add_dialog(
+        "Devices", [{"kind": "number", "label": "Rate", "min": 1,
+                     "max": 192000, "value": 44100}],
+        buttons=["Rescan", "Cancel"])
+    dialog.open()
+    ctx.layout()
+    assert dialog.actions.screen_box[1] == pytest.approx(
+        dialog.popup.y + dialog.popup.height - POPUP_PAD - APPLY_HEIGHT)
+    assert [button.y for button in dialog.action_buttons] == [0.0, 0.0, 0.0]
+    assert dialog.popup.height <= DIALOG_MAX_HEIGHT, \
+        "a tall window does not get a stretched form"
+
+
+def test_a_resize_keeps_the_buttons_at_the_bottom_and_grows_the_band():
+    """``set_size`` and one layout pass: the scroll area takes the new room.
+
+    Nothing re-builds the page: the anchors the dialog wrote once are what the
+    pass reads, which is why the caption and the buttons do not need to be moved
+    by hand a second time and why the band between them is the only thing that
+    changes size.
+    """
+    ctx = UIContext(width=400, height=240)
+    dialog = MenuBar(ctx, "menu").menu("Audio").add_dialog(
+        "Devices", [{"kind": "number", "label": "Rate", "min": 1,
+                     "max": 192000, "value": 44100}],
+        buttons=["Rescan", "Cancel"])
+    dialog.open()
+    ctx.layout()
+    before = dialog.body.height
+    ctx.set_size(900, 700)
+    ctx.layout()
+    assert dialog.body.height > before
+    assert dialog.actions.screen_box[1] == pytest.approx(
+        dialog.popup.y + dialog.popup.height - POPUP_PAD - APPLY_HEIGHT)
+    assert dialog.popup.y + dialog.popup.height <= 700 - DIALOG_MARGIN
+    said = dialog.status.screen_box
+    assert said[1] + said[3] <= dialog.actions.screen_box[1]
+
+
+def test_a_title_drag_moves_the_page_and_clamps_at_the_edge():
+    """Grabbing the title row moves the panel, and everything glued to it goes.
+
+    The rows are not slid by hand: the drag writes the panel's corner and the
+    next pass re-reads every child from it, which is the same mechanism a resize
+    runs through. A drag past the edge stops at the edge rather than putting half
+    a settings page outside the window.
+    """
+    ctx = UIContext(width=900, height=700)
+    dialog = MenuBar(ctx, "menu").menu("Audio").add_dialog(
+        "Devices", [{"kind": "list", "label": "Outputs", "provider": "outs"}],
+        provider=lambda: {"outs": {"choices": [f"d{n}" for n in range(4)],
+                                   "payloads": list(range(4))}},
+        buttons=["Rescan", "Cancel"])
+    dialog.open()
+    ctx.layout()
+    row = dialog.body.content_child.children[0]
+    was = (dialog.popup.x, dialog.popup.y, row.screen_box[1])
+    dialog.title_widget.on_press(was[0] + 20.0, was[1] + 5.0, 0, 0)
+    dialog.title_widget.on_drag(13.0, 27.0, 0)
+    dialog.title_widget.on_release(was[0] + 33.0, was[1] + 32.0, 0, 0)
+    ctx.layout()
+    assert dialog.popup.x == pytest.approx(was[0] + 13.0)
+    assert dialog.popup.y == pytest.approx(was[1] + 27.0)
+    assert row.screen_box[1] == pytest.approx(was[2] + 27.0)
+    # and a page thrown at the corner is caught by the client rect, not lost
+    dialog.move(9000.0, 9000.0)
+    assert dialog.popup.x + dialog.popup.width == pytest.approx(
+        900 - DIALOG_MARGIN)
+    assert dialog.popup.y + dialog.popup.height == pytest.approx(
+        700 - DIALOG_MARGIN)
 
 
 def test_a_quick_button_writes_the_field_and_re_reads(ctx):

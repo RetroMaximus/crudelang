@@ -127,7 +127,8 @@ class InputRouter:
     def __init__(self, hit_test: Optional[Callable[[float, float], Any]] = None,
                  *, width: float = 0.0, height: float = 0.0,
                  hotkeys: Optional[Dict[str, Callable[..., Any]]] = None,
-                 root: Any = None) -> None:
+                 root: Any = None,
+                 scroll_owner: Optional[Callable[[Any], Any]] = None) -> None:
         #: where the pointer is, in logical pixels, y down from the window's top
         self.x = 0.0
         self.y = 0.0
@@ -140,6 +141,11 @@ class InputRouter:
         self.focus: Any = None
         #: the widget a drag belongs to, whoever the pointer is currently over
         self.capture: Any = None
+        #: ``widget -> the widget the wheel belongs to``, given the one under the
+        #  pointer. The layer that knows which boxes can slide installs this (a
+        #  :class:`~crude.ui.context.UIContext` does); left out, the wheel goes
+        #  where every other event goes - straight to whatever was hit.
+        self.scroll_owner = scroll_owner
         #: ``"f1"``, ``"control+s"`` -> callable, filled by ``ON_KEY``, which is
         #  the layer that may accept a shorter spelling and normalise it to this
         self.hotkeys: Dict[str, Callable[..., Any]] = dict(hotkeys or {})
@@ -441,14 +447,22 @@ class InputRouter:
         steps = (float(event.get("dx", 0.0)) * SCROLL_NOTCH,
                  float(event.get("dy", 0.0)) * SCROLL_NOTCH)
         moved = fine_delta(steps[0], steps[1], mods)
-        if not self._call(target, "on_scroll", moved[0], moved[1], mods):
+        owner = target
+        if self.scroll_owner is not None:
+            # a wheel is the one gesture that is not necessarily the hit widget's:
+            # the pointer is on a *row*, and the thing that moves is the box the row
+            # is inside. Whoever was given the question knows the answer.
+            owner = self.scroll_owner(target)
+            if owner is None:
+                owner = target
+        if not self._call(owner, "on_scroll", moved[0], moved[1], mods):
             # no wheel handler is not no answer: a wheel is a coarse drag, and a
             # widget that understands a drag understands a scroll already
-            self._call(target, "on_drag", moved[0], moved[1], mods)
-            if target is not None:
-                self._log(event, "scroll-as-drag", target)
+            self._call(owner, "on_drag", moved[0], moved[1], mods)
+            if owner is not None:
+                self._log(event, "scroll-as-drag", owner)
         else:
-            self._log(event, "scroll", target)
+            self._log(event, "scroll", owner)
 
     def _resized(self, event: InputEvent) -> None:
         self.width = float(event.get("width", self.width))

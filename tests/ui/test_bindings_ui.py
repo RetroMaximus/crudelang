@@ -114,7 +114,7 @@ _EXPECTED_BINDINGS = (
     "PANEL", "TEXT", "BUTTON", "TOGGLE", "SLIDER", "VSLIDER", "KNOB",
     "NUMBER", "METER", "RADIO", "DROPDOWN",
     "WAVEFORM", "SPECTRUM", "PLOT", "LOGVIEW", "ADSR", "CURVE", "XY_PAD", "KEYBED",
-    "PRESET_BAR",
+    "PRESET_BAR", "SCROLL",
     "ICON",
     "WIDGET_DEFINE", "PROP_DEFINE",
     "PLACE", "NODE_ADD",
@@ -164,6 +164,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("XY_PAD", ("label", "x", "y"), 3),
     ("KEYBED", ("label", "low", "octaves"), 3),
     ("PRESET_BAR", ("labels", "value"), 2),
+    ("SCROLL", ("label",), 1),
     ("ICON", ("glyph", "size"), 1),
     ("WIDGET_DEFINE", ("kind", "base", "pd_object", "hint"), 3),
     ("PROP_DEFINE",
@@ -267,6 +268,7 @@ _DIRECT_CONSTRUCTORS = [
     ("KEYBED", "keybed", [("label", '"keys"'), ("low", "48"),
                           ("octaves", "3")]),
     ("PRESET_BAR", "preset_bar", [("labels", '["a", "b"]'), ("value", "1")]),
+    ("SCROLL", "scroll", [("label", '"page"')]),
 ]
 
 
@@ -365,6 +367,7 @@ def test_every_catalog_kind_has_its_own_constructor(run):
         "WAVEFORM": '"x"', "SPECTRUM": '"x"', "PLOT": '"x"',
         "LOGVIEW": '"x"', "ADSR": '"x"', "CURVE": '"x"',
         "XY_PAD": '"x"', "KEYBED": '"x"', "PRESET_BAR": '["a", "b"]',
+        "SCROLL": '"x"',
     }
     produced = set()
     for word, (kind, _args, _opt) in CONSTRUCTORS.items():
