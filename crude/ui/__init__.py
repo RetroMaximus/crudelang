@@ -214,6 +214,7 @@ from .skin import (
     theme_names,
 )
 from .splash import DEFAULT_HEIGHT, DEFAULT_WIDTH, SplashCanvas
+from .menu import Menu, MenuBar, MenuItem
 from .widget import (CONTAINER_KIND, POINTER, Panel, Widget, WidgetError,
                      format_value, root_panel, top_at)
 
@@ -261,6 +262,8 @@ __all__ = [
     # the tree itself: boxes, z-order, hit tests, focus, and a face to paint
     "Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
     "format_value", "root_panel", "top_at",
+    # an in-window menu bar, built from the widgets above and nothing else
+    "MenuBar", "Menu", "MenuItem",
     # the faces the plate-and-label face cannot answer with: the synth kinds'
     # tables, looked up the same inheritance-chain way as props and behaviours
     "FACES", "Face", "face_for",

@@ -8,3 +8,6 @@ sounddevice>=0.5
 glfw>=2.7
 PyOpenGL>=3.1.7
 pyserial>=3.5
+# python-rtmidi is deliberately absent: it is the MIDI backend, optional at runtime
+# and without a guaranteed cp314 wheel, so crude only looks for it if it is there
+# and otherwise reports "no MIDI devices" instead of failing (see docs/midi.md).

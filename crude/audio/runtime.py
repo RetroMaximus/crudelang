@@ -11,10 +11,13 @@ Two jobs make it more than a holder:
   :meth:`PdSession.set_pauser` the backend's pause switch when it opens. From
   then on every ``session.control()`` block silences the stream first and brings
   it back afterwards, whichever thread called it.
-* **the headless tick** - with no device there is no callback thread, so the
-  runtime *is* the audio thread: :meth:`tick` pulls blocks from
+* **the pulled tick** - when the stream has no device thread (``--no-audio``, a
+  machine with no usable device, every test), the runtime *is* the audio thread:
+  :meth:`tick` pulls blocks from
   :class:`~crude.audio.null.NullBackend` and ages the meters, which is what makes
-  a test and a live run answer ``AUDIO_LEVEL`` the same way.
+  a test and a live run answer ``AUDIO_LEVEL`` the same way. A ``headless`` run
+  is *not* in that group: it has no window, but it opens and plays through the
+  same real device a window run does.
 """
 
 from __future__ import annotations
@@ -97,7 +100,7 @@ class AudioRuntime:
 
         backend = open_backend(
             config=self.config,
-            render=self.render,
+            render=self._render_to,
             log=self.log,
             preferred=self.preferred,
             notes=self.notes,
@@ -108,6 +111,36 @@ class AudioRuntime:
         self.notes = backend.notes
         self._wire(backend)
         return backend
+
+    def _render_to(self, ticks: int, in_buffer, out_buffer) -> None:
+        """Resolve the session on every block, not the one frozen at open time.
+
+        The ``audio.device`` phase opens the stream one step before ``pd.core``
+        makes the libpd session, so the backend cannot capture ``session.process``
+        when it is built - it must ask the runtime for the session on each block.
+        Capturing the property once left a live stream calling a no-op forever,
+        which is why a window opened, the DSP went on and still nothing was heard.
+        With no session yet the block is silenced rather than left at whatever the
+        reusable buffer happened to hold.
+        """
+        session = self.session
+        if session is None:
+            for index in range(len(out_buffer)):
+                out_buffer[index] = 0.0
+            return
+        session.process(ticks, in_buffer, out_buffer)
+
+    def attach_session(self, session) -> None:
+        """Hand the runtime the libpd session that ``pd.core`` made after opening.
+
+        The device exists before the session does, so this is the one place that
+        joins them: it sets the session the :meth:`_render_to` trampoline reads on
+        every block and gives the session this stream's pause switch. Called by
+        the loader once libpd is up; harmless to call again.
+        """
+        self.session = session
+        if self._backend is not None:
+            self._wire(self._backend)
 
     def _wire(self, backend: AudioBackend) -> None:
         """Give the session this stream's pause switch (the control-plane rule)."""
@@ -146,7 +179,127 @@ class AudioRuntime:
             self._backend.stop()
         self.stops += 1
 
-    # -- the headless tick ----------------------------------------------
+    # -- the live device switch ---------------------------------------
+    def current_devices(self) -> tuple:
+        """The ``(input, output)`` the stream is configured for (``None`` = default)."""
+        return (self.config.input_device, self.config.output_device)
+
+    #: the block sizes a stream may be restarted at: a device block has to
+    #  divide into whole 64-frame Pd ticks, and the dialog only offers these
+    BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048)
+
+    def apply_settings(self, *, input_device=None, output_device=None,
+                       extra_output_devices=(), extra_input_devices=(),
+                       sample_rate=None, block_size=None, delay_ms=None,
+                       callbacks=None, restart: bool = True) -> str:
+        """Re-open the stream with a whole new page of settings, live.
+
+        This is what the audio dialog's Apply does: devices, sample rate,
+        blocksize, the delay and the callback preference, all decided together
+        rather than one after another, because every one of them is a reason to
+        tear the stream down and open the next one. The rules it keeps:
+
+        * a blocksize that is not a multiple of 64 is refused by name - Pd's
+          vector is 64 frames and a block that is not a whole number of ticks
+          would silently drop the remainder every callback;
+        * the rate the device is opened at is handed to libpd too, through the
+          session's :meth:`~crude.pd.engine.PdSession.reconfigure`, because a
+          DSP left on the old clock while the speakers run on the new one
+          would shift every pitch in the show - measured against the real
+          libpd, a re-init re-clocks the DSP and keeps the patches;
+        * a stream that cannot be reopened is *said*, in the raised message,
+          and the old config stays in effect rather than half-applied;
+        * side devices the backend has no stream for are said too, because a
+          "multiple devices" switch that a one-device backend quietly ignored
+          would leave the person believing two speakers are live;
+        * a run that opened no stream at all (``--no-audio``) is not a run that
+          applies settings: the page is remembered and *said* as remembered,
+          rather than the refusal of a device being overridden by a menu.
+
+        The call answers a plain words string - what changed - which is what
+        the dialog shows on its status line, so the person reads exactly what
+        the running stream agreed to.
+        """
+        if block_size is not None and int(block_size) not in self.BLOCK_SIZES:
+            raise AudioError(
+                f"a block size must be whole Pd ticks - "
+                f"{', '.join(str(n) for n in self.BLOCK_SIZES)} - "
+                f"got {block_size}"
+            )
+        kwargs = {"input_device": input_device,
+                  "output_device": output_device,
+                  "output_devices": tuple(extra_output_devices or ()),
+                  "input_devices": tuple(extra_input_devices or ())}
+        if sample_rate is not None:
+            kwargs["sample_rate"] = int(sample_rate)
+        if block_size is not None:
+            kwargs["block_size"] = int(block_size)
+        if delay_ms is not None:
+            kwargs["delay_ms"] = float(delay_ms)
+        if callbacks is not None:
+            kwargs["callbacks"] = bool(callbacks)
+        was_running = self.running
+        old = self.config
+        self.config = self.config.changed(**kwargs)
+        if self._backend is None:
+            # nothing was ever opened - a ``--no-audio`` run, or a page applied
+            # before the device - so there is no stream to hand the new page to
+            # and no reason for a menu to open a device this run refused
+            return (f"audio is not open in this run; the settings are "
+                    f"remembered for when it is: {self.config.describe()}")
+        if was_running:
+            self._backend.stop()
+        self._backend.close()
+        self.unwire()
+        self._backend = None
+        try:
+            backend = self.open()
+        except AudioError as exc:
+            # the stream would not take the new page: say so, and put the old
+            # settings back so what describe() reports is what plays
+            self.config = old
+            self.notes.append(f"audio: settings were not applied - {exc}")
+            raise
+        if self.session is not None:
+            self.session.reconfigure(sample_rate=self.config.sample_rate)
+        if restart and was_running:
+            self.start()
+        wanted = len(self.config.output_devices) + len(self.config.input_devices)
+        said = f"audio on {backend.describe()}"
+        if wanted > backend.side_devices():
+            said += (f"; {wanted - backend.side_devices()} extra device(s) "
+                     f"got no stream of their own from {backend.name}")
+        return said
+
+    def switch_devices(self, input_device=None, output_device=None,
+                       restart: bool = True) -> AudioBackend:
+        """Reopen the stream on different devices, without losing the session.
+
+        A config opened with one device index cannot have that index moved under
+        it (the channel counts, block size and rate the taps and libpd were built
+        for are fixed at open), so switching means tearing the stream down and
+        opening a fresh one: the runtime keeps the same session and pause wiring,
+        re-opens through :meth:`open` (which hands the new backend the
+        :meth:`_render_to` trampoline), and restarts it if it was running before -
+        which is what a configuration menu picking a new output has to feel like
+        to the person: the sound moves, it does not stop. ``None`` on either side
+        means "use the default of that direction", the same as the manifest.
+        """
+        was_running = self.running
+        self.config = self.config.changed(input_device=input_device,
+                                          output_device=output_device)
+        if self._backend is not None:
+            if was_running:
+                self._backend.stop()
+            self._backend.close()
+            self.unwire()
+            self._backend = None
+        backend = self.open()
+        if restart and was_running:
+            self.start()
+        return backend
+
+    # -- the pulled tick -------------------------------------------------
     def tick(self, blocks: int = 1) -> int:
         """Render ``blocks`` now when no device thread is doing it for us."""
         backend = self._backend
@@ -168,7 +321,7 @@ class AudioRuntime:
             backend.open()
 
         # Age first, then render: a peak measured by the last block of this period
-        # is still a peak measured *now*, and the headless answer must not differ
+        # is still a peak measured *now*, and the pulled answer must not differ
         # from the live one by one block of decay.
         self.age(blocks * self.config.block_size / float(self.config.sample_rate))
         processed = 0
@@ -195,7 +348,15 @@ class AudioRuntime:
 
     def level(self, channel: int = None, mode: str = "rms",
               source: str = "output") -> float:
-        """One meter reading: ``rms``/``peak``/``db`` on one channel or the mix."""
+        """One meter reading: ``rms``/``peak``/``db`` on one channel or the mix.
+
+        With no device open (a ``--no-audio`` run) the answer is silence, not an
+        error: a script that meters its output every frame must keep running and
+        read a flat zero rather than raise, trip the handler-mute rule and freeze
+        the rest of the frame.
+        """
+        if self._backend is None:
+            return 0.0
         if mode not in LEVEL_MODES:
             raise AudioError(
                 f"an audio level mode must be {', '.join(sorted(LEVEL_MODES))}, "
@@ -212,7 +373,13 @@ class AudioRuntime:
 
     def waveform(self, frames: int = None, channel: int = None,
                  source: str = "output") -> List[float]:
-        """The most recent samples, oldest first - what a scope widget draws."""
+        """The most recent samples, oldest first - what a scope widget draws.
+
+        No device means no samples: an empty trace, so a scope left on a silent
+        run draws a flat line instead of raising every frame.
+        """
+        if self._backend is None:
+            return []
         taps = self._taps(source)
         if frames is not None:
             frames = max(int(frames), 0)

@@ -21,8 +21,10 @@ from . import core  # noqa: F401  (registers the core bindings on import)
 from . import pd  # noqa: F401  (registers the PD_* / ON_PD bindings)
 from . import pd_author  # noqa: F401  (registers the patch-authoring bindings)
 from . import audio  # noqa: F401  (registers the AUDIO_* bindings)
+from . import midi  # noqa: F401  (registers the MIDI_* / ON_MIDI bindings)
 from . import project  # noqa: F401  (registers RES / PRESET_* / the run bindings)
 from . import ui  # noqa: F401  (registers the widget bindings and SET/GET's widget half)
+from . import menu  # noqa: F401  (registers the MENU_* in-window menu, area "ui")
 from . import serial  # noqa: F401  (registers the SERIAL_* / ON_SERIAL bindings)
 
 __all__ = [
@@ -37,7 +39,9 @@ __all__ = [
     "pd",
     "pd_author",
     "audio",
+    "midi",
     "project",
     "ui",
+    "menu",
     "serial",
 ]

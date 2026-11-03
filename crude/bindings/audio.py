@@ -66,6 +66,36 @@ def audio_devices(ctx):
     return List([String(device.describe()) for device in devices])
 
 
+@binding("AUDIO_USE_DEVICES", ["input", "output"], area=AREA, optional=2)
+def audio_use_devices(ctx):
+    """Switch the running stream onto new devices, live.
+
+    Each argument is a device *index* as ``AUDIO_DEVICES()`` reports it (its
+    leading ``[n]``); an omitted one means "keep the default for that direction".
+    The stream is torn down and reopened on the pick, and restarted if it was
+    already playing, so a configuration menu changes where sound goes without
+    stopping the show.
+    """
+    runtime = _runtime(ctx)
+    input_device = _optional_int(ctx, "input")
+    output_device = _optional_int(ctx, "output")
+    try:
+        runtime.switch_devices(input_device, output_device)
+    except AudioError as exc:
+        _fail(ctx, exc)
+    return _handle(runtime)
+
+
+@binding("AUDIO_DEVICE", [], area=AREA)
+def audio_device(ctx):
+    """The devices this stream is on now, as ``[input, output]``: each a device
+    name, or ``default`` when that side uses the machine default."""
+    runtime = _runtime(ctx)
+    current = runtime.current_devices()
+    return List([String(str(side) if side is not None else "default")
+                 for side in current])
+
+
 @binding("AUDIO_START", ["backend"], area=AREA, optional=1)
 def audio_start(ctx):
     """Open and run the stream; without a device this is the silent backend."""
@@ -121,6 +151,7 @@ def audio_waveform(ctx):
 
 #: Names this module registers, used by the binding-help generator and tests.
 BINDINGS = (
-    "AUDIO_INFO", "AUDIO_DEVICES", "AUDIO_START", "AUDIO_STOP",
+    "AUDIO_INFO", "AUDIO_DEVICES", "AUDIO_USE_DEVICES", "AUDIO_DEVICE",
+    "AUDIO_START", "AUDIO_STOP",
     "AUDIO_LEVEL", "AUDIO_WAVEFORM",
 )

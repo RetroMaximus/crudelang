@@ -1,6 +1,6 @@
 """The pipeline that turns a project directory into a running host.
 
-Fourteen phases, in the order :mod:`crude.project.progress` names, each doing one
+Fifteen phases, in the order :mod:`crude.project.progress` names, each doing one
 thing and saying what it found:
 
 ``manifest`` the declaration is read → ``environment`` the folders and the log
@@ -9,7 +9,8 @@ stream is open → ``pd.core`` libpd is running → ``pd.build`` the authored pa
 are written into the cache → ``pd.patches`` they are opened, with the hand-written
 ones → ``pd.arrays`` the number files fill the tables → ``presets`` the pattern
 files are read → ``images`` and ``sounds`` the media is loaded → ``serial`` the
-links are opened → ``script.compile`` the entry script parses → ``runtime.activate``
+links are opened → ``midi`` the MIDI ports are opened, for a project that asks
+for them → ``script.compile`` the entry script parses → ``runtime.activate``
 the host is handed to the loop.
 
 The order is not arbitrary and is not configurable: each phase only touches what
@@ -21,9 +22,9 @@ widgets that draw them.
 
 Two things make this testable on a machine with no DLL, no device and no display:
 every subsystem arrives from the outside if the caller wants it to (``lib``,
-``backend``, ``media``, ``serial``, ``runtime``), and a phase that is not in the
-plan is never run - which is exactly how ``crude check`` answers questions about a
-project without touching hardware.
+``backend``, ``media``, ``serial``, ``midi``, ``runtime``), and a phase that is not
+in the plan is never run - which is exactly how ``crude check`` answers questions
+about a project without touching hardware.
 
 When a phase fails, whatever earlier phases opened is closed in reverse order
 before the error reaches the CLI, so a project that cannot load leaves no stream
@@ -105,6 +106,12 @@ class LoadOptions:
     backend: Optional[str] = None
     #: ``--no-serial``
     serial: Optional[bool] = None
+    #: ``--no-midi`` (False) / None leaves it to whether the manifest has a
+    #: ``midi`` section at all - a project that never declared one never builds
+    #: a runtime, and one that did can still be told to skip it for this run
+    midi: Optional[bool] = None
+    #: force a MIDI backend name, or ``null`` for ``--no-midi``
+    midi_backend_name: Optional[str] = None
     #: ``--progress auto|console|json|splash|none``
     progress: Optional[str] = None
     #: ``--fps``
@@ -139,6 +146,30 @@ class LoadOptions:
             return self.serial
         return bool(manifest.serial)
 
+    def wants_midi(self, manifest: Manifest) -> bool:
+        """Does this run build a MIDI runtime at all?
+
+        Only a project that declares a ``midi`` section, and that has not had
+        that switched off for this run; ``midi.enabled: false`` in the manifest
+        means the same as saying nothing here - the runtime is not built, and
+        a script's ``MIDI_DEVICES()`` is not reachable, exactly as if the
+        project had no MIDI support at all.
+        """
+        if self.midi is not None:
+            return self.midi and bool(manifest.midi.enabled)
+        return bool(manifest.midi.enabled)
+
+    def midi_backend(self, manifest: Manifest) -> Optional[str]:
+        if not self.wants_midi(manifest):
+            return NULL_BACKEND
+        return self.midi_backend_name or manifest.midi.backend
+
+    def midi_strict(self, manifest: Manifest) -> bool:
+        """Only a project that needs MIDI and called it non-optional insists."""
+        if not self.wants_midi(manifest):
+            return False
+        return manifest.midi.strict
+
     def progress_spec(self, manifest: Manifest) -> str:
         return self.progress or manifest.loading.progress
 
@@ -167,6 +198,7 @@ class LoadOptions:
             "backend": self.audio_backend(manifest),
             "strict_audio": self.audio_strict(manifest),
             "serial": self.wants_serial(manifest),
+            "midi": self.wants_midi(manifest),
             "progress": self.progress_spec(manifest),
             "fps": self.target_fps(manifest),
             "rebuild_pd": self.rebuild_pd,
@@ -303,7 +335,7 @@ class Project:
     def __init__(self, manifest: Manifest, *, options: Optional[LoadOptions] = None,
                  log: Optional[Callable[[str], None]] = None,
                  lib: Any = None, backend: Any = None, media: Any = None,
-                 serial: Any = None, runtime: Any = None,
+                 serial: Any = None, midi: Any = None, runtime: Any = None,
                  builders: Optional[Dict[str, Callable[[Any], None]]] = None,
                  resources: Optional[ResourceTable] = None,
                  program: Any = None, clock: Any = None):
@@ -314,8 +346,9 @@ class Project:
         self.backend = backend
         self.media = media if media is not None else NullMedia()
         self.serial = serial
+        self.midi = midi
         self.runtime = runtime
-        #: the frame loop's own UI: built with the mode in phase 14, reached by
+        #: the frame loop's own UI: built with the mode in phase 15, reached by
         #  the ``WIDGET`` bindings through this project as ``host.ui``
         self.ui: Any = None
         #: the window a ``window`` project opened to draw its splash on. The
@@ -341,6 +374,7 @@ class Project:
         self.sounds: Dict[str, SoundHandle] = {}
         self.presets: Dict[str, Any] = {}
         self.links: List[Tuple[Any, Any]] = []
+        self.ports: List[Tuple[Any, Any]] = []
         self.program: Any = program
         self.source: str = ""
         self.ast: Any = None
@@ -501,6 +535,7 @@ class Project:
             pd=self.pd,
             resources=self.resources,
             serial=self.serial,
+            midi=self.midi,
             runtime=self.runtime,
             ui=self.ui,
             clock=self.clock,
@@ -510,7 +545,8 @@ class Project:
     def attach_program(self, program: Any) -> None:
         """Hand the program to every subsystem that fires script callbacks."""
         self.program = program
-        for value in (self.pd, self.audio, self.serial, self.runtime, self.ui):
+        for value in (self.pd, self.audio, self.serial, self.midi, self.runtime,
+                      self.ui):
             attach = getattr(value, "attach_program", None)
             if callable(attach):
                 attach(program)
@@ -653,6 +689,8 @@ class Project:
             f"patches   {len(manifest.pd.patches)} declared",
             f"serial    {len(manifest.serial)} declared"
             if self.options.wants_serial(manifest) else "serial    off",
+            f"midi      {self.options.midi_backend(manifest) or 'default'}"
+            if self.options.wants_midi(manifest) else "midi      off",
         ]
         if self.resources is not None:
             counts = self.resources.counts()
@@ -675,6 +713,7 @@ class Project:
             "images": sorted(self.images),
             "sounds": sorted(self.sounds),
             "presets": sorted(self.presets),
+            "midi": self.midi.info() if getattr(self.midi, "info", None) else None,
             "notes": list(self.notes),
         }
 
@@ -828,6 +867,8 @@ class LoadPipeline:
             f"{counts[kind]} {kind}" for kind in KINDS))
         if manifest.serial:
             self.detail(name, f"{len(manifest.serial)} serial link(s) declared")
+        if manifest.midi.enabled:
+            self.detail(name, "midi declared")
 
     # -- 2 environment ---------------------------------------------------
     def _phase_environment(self) -> None:
@@ -914,7 +955,14 @@ class LoadPipeline:
         self.detail(name, f"{backend.describe()}")
         self.details(name, runtime.notes)
         if not backend.live:
-            self.detail(name, "a silent stream: the runtime tick renders its blocks")
+            # A run that wanted audio and landed on a pulled backend will make no
+            # sound on this machine, whatever else works. That has to be said in
+            # the run's own output, not only in a progress detail that scrolls
+            # away: silence nobody warned about is indistinguishable from a bug.
+            self.detail(name, "a silent stream: the runtime tick renders its "
+                              "blocks")
+            project.note("audio: this run reached no device - the stream is "
+                         "pulled, not played, and nothing will be heard")
 
     # -- 5 pd.core -------------------------------------------------------
     def _phase_pd_core(self) -> None:
@@ -949,6 +997,12 @@ class LoadPipeline:
                                project_dir=manifest.project_dir,
                                log=project.note, build_dir=manifest.build_path(),
                                rebuild_pd=options.rebuild_pd)
+        # The stream was opened a phase early with no session to render into;
+        # hand it the one just made so its callback reaches libpd (and so a live
+        # window is heard, not merely started). Wiring the pauser alone left the
+        # render frozen to the no-op it captured at open time.
+        if project.audio is not None:
+            project.audio.attach_session(session)
         self._wire_pauser(session, project.audio)
         session.dsp(False)
         self.detail(name, "dsp off; a script turns it on with PD_DSP")
@@ -1230,7 +1284,64 @@ class LoadPipeline:
             project.note(f"{len(decls)} serial link(s) are declared and recorded; "
                          f"the serial stage opens the ports")
 
-    # -- 13 script.compile ----------------------------------------------
+    # -- 13 midi ---------------------------------------------------------
+    def _phase_midi(self) -> None:
+        """Build the MIDI runtime, for a project that declared a ``midi`` block.
+
+        Unlike ``serial``, there is nothing in the manifest to open here: the
+        section only says whether this project wants MIDI at all and which
+        backend it would prefer. Ports are opened by the script, when a person
+        picks one in the File menu or calls ``MIDI_OPEN`` directly. A project
+        that never declared ``midi`` never reaches this phase at all (it is not
+        in its plan); a project that declared it optional, on a machine with no
+        ``python-rtmidi``, gets the null backend and an empty device list - a
+        note, not a failure, exactly like ``--no-audio`` on the stream.
+        """
+        name = "midi"
+        project, options = self.project, self.options
+
+        if not options.wants_midi(self.manifest):
+            self.detail(name, "MIDI is off for this run; no backend was opened")
+            return
+
+        if project.midi is not None:
+            # a caller (a test, a host) injected its own runtime and owns it
+            self.detail(name, f"{getattr(project.midi, 'backend', None)} supplied "
+                              f"by the caller")
+            if project.program is not None:
+                project.attach_program(project.program)
+            return
+
+        from ..midi import MidiRuntime, MidiUnavailable, open_backend
+
+        # a strict project that named a backend it cannot have raises out of
+        # ``open_backend``: that is the load's failure to report, not a silent
+        # fallback, so it goes straight back up.
+        try:
+            backend = open_backend(log=project.note,
+                                   preferred=options.midi_backend(self.manifest),
+                                   strict=options.midi_strict(self.manifest))
+        except MidiUnavailable:
+            raise
+        except Exception as exc:  # pragma: no cover - a backend's own import bug
+            project.warning(f"midi: no backend could be opened ({exc}); "
+                            f"continuing with no MIDI")
+            backend = None
+
+        runtime = MidiRuntime(backend=backend, program=project.program,
+                              log=project.note)
+        project.midi = runtime
+        if project.program is not None:
+            runtime.attach_program(project.program)
+        if backend is not None:
+            project.record("the MIDI runtime", runtime.close_all)
+            self.detail(name, backend.name)
+            self.details(name, getattr(backend, "notes", []))
+        else:
+            self.detail(name, "no MIDI backend; a script's MIDI_DEVICES() "
+                              "will be empty")
+
+    # -- 14 script.compile ----------------------------------------------
     def _phase_script_compile(self) -> None:
         """Read the entry script and parse it, without running a statement."""
         name = "script.compile"
@@ -1257,7 +1368,7 @@ class LoadPipeline:
         self.detail(name, f"{manifest.entry}: {lines} line(s), "
                           f"{statements} statement(s) parsed")
 
-    # -- 14 runtime.activate --------------------------------------------
+    # -- 15 runtime.activate --------------------------------------------
     def _phase_runtime_activate(self) -> None:
         """Hand the filled-in host to the loop that is going to run it.
 

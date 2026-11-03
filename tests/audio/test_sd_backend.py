@@ -17,6 +17,8 @@ from crude.audio.base import (
     AudioError,
     AudioUnavailable,
     RecordingRender,
+    read_samples,
+    samples_to_bytes,
 )
 from crude.audio.sd_backend import SoundDeviceBackend, query_devices
 
@@ -354,4 +356,293 @@ def test_describe_names_the_backend_the_state_and_the_device(config, stub_soundd
     assert "48000 Hz, 64-frame blocks, 2 in / 2 out" in backend.describe()
     backend.start()
     assert "(running)" in backend.describe()
+    backend.close()
+
+
+# -- the settings page: more than one device, and the latency preference --
+
+
+def test_an_extra_output_device_gets_its_own_stream_and_the_same_block(
+        stub_sounddevice):
+    """Two speakers are two streams and one render: the block is copied, not
+    computed twice, and the copy is a ``write``, never a second callback."""
+    stub = stub_sounddevice()
+    backend = SoundDeviceBackend(AudioConfig(in_channels=0, out_channels=2,
+                                             output_device="Speakers",
+                                             output_devices=[2]))
+    backend.open()
+
+    assert len(stub.streams) == 2, "the primary stream plus one side"
+    side = backend._side_streams[0]
+    assert side.kind == "output"
+    assert side.kwargs["device"] == 2
+    assert side.kwargs["channels"] == 2
+    assert side.callback is None, "a side stream has no renderer of its own"
+    assert backend.side_devices() == 1
+
+    outdata = backend._stream.fire(frames=64, out_channels=2)
+    assert side.written == [outdata], "the rendered block, handed to the second device"
+
+    backend.start()
+    assert side.started and backend.running
+    backend.stop()
+    assert side.stopped
+    backend.close()
+    assert side.closed and backend._side_streams == []
+
+
+def test_a_second_toggle_for_the_device_already_playing_opens_no_side_stream(
+        stub_sounddevice):
+    """A device that is already the stream's own is not opened under it twice."""
+    stub_sounddevice()
+    backend = SoundDeviceBackend(AudioConfig(in_channels=0, out_channels=2,
+                                             output_device=2, output_devices=[2]))
+    backend.open()
+
+    assert backend._side_streams == []
+    assert backend.side_devices() == 0
+    backend.close()
+
+
+def test_a_side_output_that_will_not_open_fails_the_whole_request(stub_sounddevice):
+    """A silently missing speaker is a lie, so the page is refused out loud."""
+    stub = stub_sounddevice()
+    real = stub.OutputStream
+
+    def maker(**kwargs):
+        if kwargs.get("device") == 2:
+            raise RuntimeError("Device is busy")
+        return real(**kwargs)
+
+    stub.OutputStream = maker
+    backend = SoundDeviceBackend(AudioConfig(in_channels=0, out_channels=2,
+                                             output_devices=[2]))
+    with pytest.raises(AudioUnavailable,
+                       match="could not open side output 2: Device is busy"):
+        backend.open()
+    assert backend._side_streams == []
+
+
+def test_an_extra_input_device_is_mixed_into_the_block_libpd_reads(
+        fake_buffer, stub_sounddevice):
+    """Two microphones, one input: the side stream's callback fills a buffer and
+    the render callback adds it, so the session still hears one block."""
+    stub_sounddevice()
+    seen = []
+
+    def render(ticks, in_buffer, out_buffer):
+        seen.append(list(in_buffer))
+
+    backend = SoundDeviceBackend(AudioConfig(block_size=4, in_channels=2,
+                                             out_channels=2, input_device=2,
+                                             input_devices=[0]), render=render)
+    backend.open()
+
+    assert len(backend._side_inputs) == 1
+    side, _block = backend._side_inputs[0]
+    assert side.kind == "input"
+    assert side.kwargs["device"] == 0
+    assert side.kwargs["channels"] == 2
+    assert side.callback is not None, "a microphone only speaks when called"
+    assert backend.side_devices() == 1
+
+    side.fire(indata=fake_buffer([0.125] * 8), frames=4)
+    backend._stream.fire(indata=fake_buffer([0.25] * 8), frames=4)
+    assert seen == [[0.375] * 8], "one block, both devices"
+
+    backend.close()
+    assert side.closed and backend._side_inputs == []
+
+
+def test_the_delay_the_page_asked_for_is_the_latency_the_stream_gets(
+        config, stub_sounddevice):
+    stub_sounddevice()
+    backend = SoundDeviceBackend(config.changed(delay_ms=25.0, callbacks=False))
+    backend.open()
+
+    assert backend._stream.kwargs["latency"] == 0.025
+    backend.close()
+
+
+def test_the_callback_switch_picks_which_thread_pulls_the_block(
+        config, stub_sounddevice):
+    """On is PortAudio's thread calling the renderer; off is crude's own loop.
+
+    The switch decides the shape of the stream, not a word in a latency field:
+    the library has no idea what ``"callback"`` means as a timing target and
+    answers ``must be real number, not str``, which is exactly how a first run of
+    the metronome example ended up with a slider and no sound.
+    """
+    stub_sounddevice()
+    backend = SoundDeviceBackend(config.changed(callbacks=True))
+    backend.open()
+    assert backend.polled is False
+    assert backend._stream.raw is False, "a callback stream, not a Raw one"
+    assert backend._stream.kwargs["callback"] == backend.callback
+    assert "latency" not in backend._stream.kwargs, "no delay, no preference"
+    backend.close()
+
+    backend = SoundDeviceBackend(config.changed(callbacks=False))
+    backend.open()
+    assert backend.polled is True
+    assert backend._stream.raw is True, "a Raw stream: nothing moves unless asked"
+    assert backend._stream.callback is None, "a callback here would be the switch lying"
+    backend.close()
+
+
+def test_a_timing_target_the_library_cannot_hold_is_refused_on_the_way_in(
+        config, stub_sounddevice):
+    """The crash the stub now guards: a word where ctypes wants a double.
+
+    ``must be real number, not str`` is what PortAudio's own argument check
+    answers with, and it reaches a person as "no audio backend could be opened" -
+    a fake that recorded whatever it was handed would have let that ship.
+    """
+    stub = stub_sounddevice()
+    with pytest.raises(TypeError, match="must be a real number, not str"):
+        stub.OutputStream(channels=2, samplerate=48000, blocksize=64,
+                          dtype="float32", latency="callback")
+
+    backend = SoundDeviceBackend(config.changed(delay_ms=0.0, callbacks=True))
+    backend.open()
+    assert "latency" not in backend._stream.kwargs
+    backend.close()
+
+
+def test_a_polled_stream_renders_the_block_it_reads_and_writes_the_one_it_made(
+        stub_sounddevice):
+    """With no callback the pump is the audio thread: bytes in, Pd, bytes out."""
+    stub_sounddevice()
+    seen = []
+
+    def render(ticks, in_buffer, out_buffer):
+        seen.append(list(in_buffer))
+        for index in range(len(out_buffer)):
+            out_buffer[index] = 0.5
+
+    backend = SoundDeviceBackend(AudioConfig(block_size=4, in_channels=2,
+                                             out_channels=2, callbacks=False),
+                                 render=render)
+    backend.open()
+    stream = backend._stream
+    stream.push(samples_to_bytes([0.25] * 8))
+
+    backend._polled_block(4)
+
+    assert seen == [[0.25] * 8], "the block it asked for is the block Pd saw"
+    assert read_samples(stream.written[0]) == [0.5] * 8
+    assert backend.blocks == 1 and backend.frames == 4
+    backend.close()
+
+
+def test_a_polled_stream_counts_what_the_device_reports_back(stub_sounddevice):
+    """A blocking read/write is the only place an xrun gets told, so it is heard.
+
+    A callback is handed a status flag; a polled call simply answers that the
+    buffer ran over or dry. Both have to reach the same counters, or the same
+    fault would be visible in one mode and invisible in the other.
+    """
+    stub_sounddevice()
+    backend = SoundDeviceBackend(AudioConfig(block_size=4, in_channels=2,
+                                             out_channels=2, callbacks=False),
+                                 render=RecordingRender(value=0.25))
+    backend.open()
+    stream = backend._stream
+
+    stream.overflow = True
+    stream.push(samples_to_bytes([0.0] * 8))
+    backend._polled_block(4)
+    assert backend.xruns_input == 1
+
+    stream.overflow = False
+    stream.underflow = True
+    stream.push(samples_to_bytes([0.0] * 8))
+    backend._polled_block(4)
+    assert backend.xruns_output == 1
+    assert backend.dropped == 2, "both are samples lost"
+    assert "input overflow" in backend.status_flags[0]
+    backend.close()
+
+
+def test_a_polled_stream_reads_a_side_microphone_on_the_same_beat(
+        stub_sounddevice):
+    """Without callbacks the sides are polled too - nothing in the show is in a
+    callback, and two microphones still arrive as one block."""
+    stub_sounddevice()
+    seen = []
+
+    def render(ticks, in_buffer, out_buffer):
+        seen.append(list(in_buffer))
+
+    backend = SoundDeviceBackend(AudioConfig(block_size=4, in_channels=2,
+                                             out_channels=0, input_device=2,
+                                             input_devices=[0], callbacks=False),
+                                 render=render)
+    backend.open()
+
+    side, _block = backend._side_inputs[0]
+    assert side.raw is True, "the switch applies to every device, not just the first"
+    assert side.callback is None
+    assert backend.side_devices() == 1
+
+    backend._stream.push(samples_to_bytes([0.25] * 8))
+    side.push(samples_to_bytes([0.125] * 8))
+    backend._polled_block(4)
+
+    assert seen == [[0.375] * 8], "one block, both microphones"
+    backend.close()
+
+
+def test_the_polling_thread_is_woken_by_the_stream_it_is_reading(
+        config, stub_sounddevice):
+    """``stop()`` has to end a read that is parked on the device, not outlive it.
+
+    A polled stream is a thread waiting on hardware, so the shutdown is the part
+    that has to be proved: the thread is asked to leave, the stream is stopped
+    under it, and the join waits for it to have gone - with a read that came back
+    because *we* stopped it deliberately not logged as a device fault.
+    """
+    stub_sounddevice()
+    backend = SoundDeviceBackend(config.changed(callbacks=False))
+    backend.open()
+    stream = backend._stream
+    assert stream.blocking, "a Raw stream is paced by the device, not by a loop"
+
+    backend.start()
+    assert backend._pump_thread is not None, "a polled stream needs a thread to pull"
+
+    backend.stop()
+    assert backend._pump_thread is None, "the shutdown waited for the thread"
+    assert backend.notes == [], "a stop we asked for is not a fault"
+    backend.close()
+
+
+def test_a_polling_thread_a_device_refuses_says_so_and_leaves(stub_sounddevice):
+    """A dead device must not spin, and must not be quiet about it either."""
+    stub_sounddevice()
+    backend = SoundDeviceBackend(AudioConfig(block_size=4, in_channels=2,
+                                             out_channels=2, callbacks=False))
+    backend.open()
+    stream = backend._stream
+
+    def gone(frames):
+        raise RuntimeError("device is gone")
+
+    stream.read = gone
+    backend._pump()  # returns, because the loop ends on the first refused block
+
+    assert backend.notes == ["audio: the polling thread stopped - device is gone"]
+    assert stream.written == [], "nothing was handed to a device that refused to speak"
+    backend.close()
+
+
+def test_the_latency_preference_is_asked_of_the_side_devices_too(stub_sounddevice):
+    """Every device in a show runs on one clock, or they drift apart."""
+    stub_sounddevice()
+    backend = SoundDeviceBackend(AudioConfig(in_channels=0, out_channels=2,
+                                             output_devices=[2], delay_ms=12.5))
+    backend.open()
+
+    assert backend._stream.kwargs["latency"] == 0.0125
+    assert backend._side_streams[0].kwargs["latency"] == 0.0125
     backend.close()

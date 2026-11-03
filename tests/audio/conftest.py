@@ -13,7 +13,9 @@ adapters look the library up in ``sys.modules`` on every call.
 
 from __future__ import annotations
 
+import array
 import sys
+import threading
 import types
 
 import pytest
@@ -21,6 +23,9 @@ import pytest
 from crude.audio import AudioConfig, NullBackend
 from crude.audio.runtime import AudioRuntime
 from crude.lang import Program
+
+#: how long a parked ``read()`` waits before calling a missed wake-up a bug
+READ_PARK_SECONDS = 5.0
 
 #: what the stubs report: one input, one output, one of each, one broken
 SD_DEVICES = [
@@ -64,10 +69,19 @@ class FakeBuffer:
 
 
 class StubStream:
-    """``sounddevice``'s three stream shapes: remembers how it was built."""
+    """``sounddevice``'s six stream shapes: remembers how it was built.
 
-    def __init__(self, kind="duplex", **kwargs):
+    Three of them are callback-driven and three are the ``Raw`` ones a polled
+    backend reads and writes. The stub keeps the two apart the way the library
+    does: ``callback`` is only ever recorded for a callback shape, ``read()``
+    hands out bytes for a ``Raw`` one, and ``fire()`` drives the callback of a
+    test that wants to stand in for PortAudio's own thread.
+    """
+
+    def __init__(self, kind="duplex", raw=False, **kwargs):
         self.kind = kind
+        #: True for a ``RawStream``/``RawOutputStream``/``RawInputStream``
+        self.raw = raw
         self.kwargs = kwargs
         self.callback = kwargs.get("callback")
         self.finished_callback = kwargs.get("finished_callback")
@@ -75,6 +89,60 @@ class StubStream:
         self.stopped = False
         self.closed = False
         self.raise_on_start = None
+        #: every block a test saw this stream handed to ``write()``
+        self.written: list = []
+        #: bytes still to be handed out by ``read()``, oldest first
+        self.inblocks: list = []
+        #: what the next ``read()``/``write()`` reports: an overflow, an underflow
+        self.overflow = False
+        self.underflow = False
+        #: a ``Raw`` stream is paced by its hardware, so a read waits for the
+        #  block the device has not delivered yet - the way a real one does, and
+        #  the only thing that keeps a polled backend from spinning in a test
+        self.blocking = raw
+        self._released = threading.Event()
+        #: frames per channel that ``read()`` turns into bytes
+        channels = kwargs.get("channels") or 0
+        self._read_channels = max(channels[0] if isinstance(channels, tuple)
+                                  else channels, 1)
+
+    def push(self, data) -> None:
+        """Deliver a block, the way a device would: queue it and wake the reader."""
+        self.inblocks.append(data)
+        self._released.set()
+
+    def write(self, data):
+        """``OutputStream.write``: the ring-buffer copy a side device gets.
+
+        A ``Raw`` stream answers with ``underflowed`` - the one bit of PortAudio
+        that only a polled write gets to hear - so the stub hands back whatever
+        the test set, and ``None`` otherwise, which is what the plain class does.
+        """
+        self.written.append(data)
+        return self.underflow if self.raw else None
+
+    def read(self, frames):
+        """``RawStream.read``: ``(bytes, overflowed)``, waiting for the device.
+
+        A blocking read parks until a block is delivered or the stream is
+        stopped, and a stream stopped under a parked reader comes back as an
+        error - the one shape of shutdown a polling thread has to be able to tell
+        from a fault, and the reason ``_pump`` looks at the stop flag before it
+        complains about what it caught.
+        """
+        while True:
+            if self.stopped or self.closed:
+                raise RuntimeError("stream stopped")
+            if self.inblocks or not self.blocking:
+                break
+            if not self._released.wait(timeout=READ_PARK_SECONDS):
+                raise AssertionError("a parked read was never woken by stop()")
+            self._released.clear()
+        if self.inblocks:
+            data = self.inblocks.pop(0)
+        else:
+            data = array.array("f", [0.0] * (frames * self._read_channels))
+        return bytes(data), self.overflow
 
     def start(self):
         if getattr(self, "raise_on_start", None):
@@ -83,9 +151,11 @@ class StubStream:
 
     def stop(self):
         self.stopped = True
+        self._released.set()
 
     def close(self):
         self.closed = True
+        self._released.set()
 
     # -- driving the callback from a test -------------------------------
     def fire(self, indata=None, frames=64, status=0, out_channels=2):
@@ -100,6 +170,22 @@ class StubStream:
         outdata = FakeBuffer(size=frames * out_channels)
         self.callback(indata, outdata, frames, None, status)
         return outdata
+
+
+def check_latency(latency):
+    """Refuse what PortAudio cannot put in a C ``double``.
+
+    The real library takes a number of seconds, the words ``"low"``/``"high"`` it
+    looks up itself, or nothing at all - a preference of any other shape reaches
+    ctypes and comes back as ``TypeError: must be real number, not str``, which is
+    exactly the crash this stub exists to catch. A fake that accepts whatever it
+    is handed turns a device bug into a passing test.
+    """
+    if latency is None or latency in ("low", "high"):
+        return None
+    if isinstance(latency, bool) or not isinstance(latency, (int, float)):
+        raise TypeError(f"latency must be a real number, not {type(latency).__name__}")
+    return latency
 
 
 class StubSoundDevice(types.ModuleType):
@@ -126,10 +212,14 @@ class StubSoundDevice(types.ModuleType):
                 return dict(entry)
         raise ValueError(f"No device matches kind '{kind}'")
 
-    def _stream(self, kind, kwargs):  # noqa: N802 - the library spells it like this
+    def _stream(self, kind, kwargs, raw=False):  # noqa: N802
         if self.open_error is not None:
             raise RuntimeError(self.open_error)
-        stream = StubStream(kind, **kwargs)
+        check_latency(kwargs.get("latency"))
+        if raw and kwargs.get("callback") is not None:
+            raise TypeError("a Raw stream is driven by read()/write(), "
+                            "so it is not given a callback")
+        stream = StubStream(kind, raw=raw, **kwargs)
         stream.raise_on_start = self.fail_start
         self.streams.append(stream)
         return stream
@@ -142,6 +232,15 @@ class StubSoundDevice(types.ModuleType):
 
     def InputStream(self, **kwargs):
         return self._stream("input", kwargs)
+
+    def RawStream(self, **kwargs):
+        return self._stream("duplex", kwargs, raw=True)
+
+    def RawOutputStream(self, **kwargs):
+        return self._stream("output", kwargs, raw=True)
+
+    def RawInputStream(self, **kwargs):
+        return self._stream("input", kwargs, raw=True)
 
 
 SPEAKERS_BY_KIND = {"output": 1, "input": 0, "duplex": 2}

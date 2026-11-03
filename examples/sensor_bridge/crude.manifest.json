@@ -4,9 +4,9 @@
   "name": "Sensor Bridge",
   "entry": "main.crude",
   "runtime": {
-    "mode": "headless",
-    "width": 320,
-    "height": 240,
+    "mode": "window",
+    "width": 360,
+    "height": 320,
     "target_fps": 50,
     "vsync": false
   },

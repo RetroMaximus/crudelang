@@ -606,6 +606,66 @@ def _folded() -> Dict[str, Callable[..., Any]]:
 
 
 # --------------------------------------------------------------------------
+# the scrollable text canvas
+# --------------------------------------------------------------------------
+
+def _logscroll() -> Dict[str, Callable[..., Any]]:
+    """A ``logview``: the wheel, the arrows and a drag move the window up the log.
+
+    Unlike every other gesture here this one moves no ``value`` - a log view has
+    none - and writes the ``scroll`` prop, which is a count of whole lines from the
+    newest. The clamp is the same one the face draws with (you cannot scroll past the
+    oldest line, and there is no point scrolling below the newest), and ``settle``
+    already refuses a negative, so the number stays a position a script can read back
+    with a ``GET`` and a preset can save.
+    """
+
+    def _top(widget: Any) -> float:
+        rows = widget.get("lines") or ()
+        return max(0.0, float(len(rows)) - 1.0)
+
+    def _set(widget: Any, want: float) -> None:
+        top = _top(widget)
+        widget.set("scroll", max(0.0, min(float(want), top)))
+
+    def scrolled(widget: Any, args: Tuple[Any, ...]) -> None:
+        notches = _notches(args)
+        if notches:
+            _set(widget, float(widget.get("scroll")) + notches)
+
+    def keyed(widget: Any, args: Tuple[Any, ...]) -> None:
+        name = str(_args(args, 0, ""))
+        held = float(widget.get("scroll"))
+        if name in _PAGE_UP:
+            _set(widget, held + PAGE_FACTOR)
+        elif name in _PAGE_DOWN:
+            _set(widget, held - PAGE_FACTOR)
+        elif name == "up":
+            _set(widget, held + 1.0)
+        elif name == "down":
+            _set(widget, held - 1.0)
+        elif name == "home":
+            _set(widget, 0.0)
+        elif name == "end":
+            _set(widget, _top(widget))
+
+    def dragged(widget: Any, args: Tuple[Any, ...]) -> None:
+        # a drag is the pointer grabbing the page: pulling it down brings older
+        # lines into view, measured against the box so a tall window scrolls fewer
+        # lines for the same hand movement than a short one
+        moved = float(_args(args, 1))
+        if not moved:
+            return
+        span = _extent(widget, "y")
+        rows = widget.get("lines") or ()
+        if span <= 0.0 or not rows:
+            return
+        _set(widget, float(widget.get("scroll")) + moved / span * len(rows))
+
+    return {"on_scroll": scrolled, "on_key": keyed, "on_drag": dragged}
+
+
+# --------------------------------------------------------------------------
 # the synth widgets: gestures against a picture, not a thumb
 # --------------------------------------------------------------------------
 
@@ -895,6 +955,7 @@ BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     "xy": _pad(),
     "keybed": _keyboard(),
     "preset_bar": _cells(),
+    "logview": _logscroll(),
 }
 
 

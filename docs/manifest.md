@@ -101,7 +101,7 @@ even before the device is opened. `input_device` and `output_device` are
 either a zero-based index or a substring of the device name; `null` means
 "whatever the backend defaults to". `optional: true` means a fallback to
 silence is a *note*, not a load failure. `enabled: false` opens no device
-at all: a run that only wants the metering taps and the headless tick sets
+at all: a run that only wants the metering taps and the pulled tick sets
 this to `false`.
 
 ## `pd`

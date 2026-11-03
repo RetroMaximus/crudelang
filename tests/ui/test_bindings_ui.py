@@ -113,7 +113,7 @@ _EXPECTED_BINDINGS = (
     "WIDGET",
     "PANEL", "TEXT", "BUTTON", "TOGGLE", "SLIDER", "VSLIDER", "KNOB",
     "NUMBER", "METER", "RADIO", "DROPDOWN",
-    "WAVEFORM", "SPECTRUM", "ADSR", "CURVE", "XY_PAD", "KEYBED",
+    "WAVEFORM", "SPECTRUM", "PLOT", "LOGVIEW", "ADSR", "CURVE", "XY_PAD", "KEYBED",
     "PRESET_BAR",
     "ICON",
     "WIDGET_DEFINE", "PROP_DEFINE",
@@ -157,6 +157,8 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("DROPDOWN", ("labels", "value"), 2),
     ("WAVEFORM", ("label",), 1),
     ("SPECTRUM", ("label",), 1),
+    ("PLOT", ("label",), 1),
+    ("LOGVIEW", ("label",), 1),
     ("ADSR", ("label", "attack", "decay", "sustain", "release"), 5),
     ("CURVE", ("label", "tension"), 2),
     ("XY_PAD", ("label", "x", "y"), 3),
@@ -254,6 +256,8 @@ _DIRECT_CONSTRUCTORS = [
     # same sugar-equals-SET proof runs over them with no new rule anywhere
     ("WAVEFORM", "waveform", [("label", '"scope"')]),
     ("SPECTRUM", "spectrum", [("label", '"analyst"')]),
+    ("PLOT", "plot", [("label", '"graph"')]),
+    ("LOGVIEW", "logview", [("label", '"log"')]),
     ("ADSR", "adsr", [
         ("label", '"env"'), ("attack", "10"), ("decay", "20"),
         ("sustain", "0.5"), ("release", "30"),
@@ -358,7 +362,8 @@ def test_every_catalog_kind_has_its_own_constructor(run):
         "SLIDER": '"x"', "VSLIDER": '"x"', "KNOB": '"x"',
         "NUMBER": '"x"', "METER": '"x"',
         "ICON": '"play"', "RADIO": '["a", "b"]', "DROPDOWN": '["a", "b"]',
-        "WAVEFORM": '"x"', "SPECTRUM": '"x"', "ADSR": '"x"', "CURVE": '"x"',
+        "WAVEFORM": '"x"', "SPECTRUM": '"x"', "PLOT": '"x"',
+        "LOGVIEW": '"x"', "ADSR": '"x"', "CURVE": '"x"',
         "XY_PAD": '"x"', "KEYBED": '"x"', "PRESET_BAR": '["a", "b"]',
     }
     produced = set()
@@ -417,6 +422,38 @@ def test_only_a_widget_handle_can_be_asked_for_a_prop(ui_failure):
     error = ui_failure('GET(12, "value")')
     assert "must be a" in error.lower()
     assert "handle" in error.lower()
+
+
+def test_a_placement_prop_round_trips_through_a_SET(eval_ui):
+    """``label_place`` is a common row, so a ``SET`` writes and a ``GET`` reads it.
+
+    The knob the notes complained about is the pointed case: a script that says
+    ``SET(k, "label_place", "left")`` gets the word back off the same row, and an
+    offset is a plain number that survives the same round trip.
+    """
+    eval_ui('VAR k = KNOB("Index", 0, 12, 7)')
+    assert eval_ui('SET(k, "label_place", "left")') == "left"
+    assert eval_ui('GET(k, "label_place")') == "left"
+    assert eval_ui('GET(k, "value_place")') == "inside", "untouched default"
+    assert eval_ui('SET(k, "label_dx", 6)') == 6.0
+    assert eval_ui('GET(k, "label_dx")') == 6.0
+
+
+def test_a_placement_word_a_script_cannot_choose_is_refused_by_name(ui_failure):
+    error = ui_failure('VAR k = KNOB("Index", 0, 12, 7)\nSET(k, "label_place", "middle")\n')
+    assert "'middle' is not a" in error or "it is one of" in error
+    assert "inside" in error and "none" in error
+
+
+def test_the_two_canvases_are_built_by_the_generic_widget_word_and_a_SET(eval_ui):
+    """A plot is data + a window; a log view is lines + a scroll: all via SET."""
+    eval_ui('VAR g = WIDGET("plot")')
+    assert eval_ui('SET(g, "data", [1, 2, 3])') == [1.0, 2.0, 3.0]
+    assert eval_ui('GET(g, "data")') == [1.0, 2.0, 3.0]
+    eval_ui('VAR v = WIDGET("logview")')
+    assert eval_ui('SET(v, "lines", ["up", "down"])') == ["up", "down"]
+    assert eval_ui('GET(v, "lines")') == ["up", "down"]
+    assert eval_ui('GET(v, "scroll")') == 0.0
 
 
 # -- place --------------------------------------------------------------

@@ -1,7 +1,7 @@
 """What a load is going to do, what it did, and how the user hears about it.
 
 The pipeline (:mod:`crude.project.loader`, next door) does not print anything. It
-works through a :class:`LoadPlan` - the fourteen weighted phases the manifest
+works through a :class:`LoadPlan` - the fifteen weighted phases the manifest
 promised - and tells a *reporter* about each step. That split is what makes the
 same loading sequence usable in three very different places:
 
@@ -57,7 +57,7 @@ class LoadStep:
         return self.name
 
 
-#: The fixed fourteen phases, in the order the pipeline runs them (weights 100).
+#: The fixed fifteen phases, in the order the pipeline runs them (weights 100).
 #:
 #: The weights are not decoration. ``images`` is 18 because decoding a texture
 #: atlas is the slowest thing a project does, and ``manifest`` is 2 because it is
@@ -75,7 +75,8 @@ PHASES: Tuple[LoadStep, ...] = (
     LoadStep("presets", 4, "the presets"),
     LoadStep("images", 18, "the images"),
     LoadStep("sounds", 13, "the sounds"),
-    LoadStep("serial", 4, "the serial links"),
+    LoadStep("serial", 2, "the serial links"),
+    LoadStep("midi", 2, "the MIDI ports"),
     LoadStep("script.compile", 3, "the entry script"),
     LoadStep("runtime.activate", 3, "the runtime"),
 )
@@ -234,7 +235,7 @@ class LoadPlan:
 
 
 def full_plan(label: str = "", mode: str = "window") -> LoadPlan:
-    """The plan for ``crude run``: all fourteen phases."""
+    """The plan for ``crude run``: all fifteen phases."""
     return LoadPlan(PHASES, label=label, mode=mode)
 
 

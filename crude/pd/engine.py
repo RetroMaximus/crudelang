@@ -213,6 +213,30 @@ class PdSession:
             self.unbind(recv)
         self.started = False
 
+    def reconfigure(self, sample_rate: int = None, in_channels: int = None,
+                    out_channels: int = None) -> None:
+        """Re-clock and/or re-shape libpd's DSP without tearing the show down.
+
+        ``libpd_init_audio`` may be called again on a live libpd: measured
+        against the real DLL, a re-init at half the rate moved a 440 Hz
+        ``[osc~]``'s crossing rate exactly as a re-clocked DSP predicts, and
+        the patches stayed loaded. The call therefore happens under the
+        stream's own pause (the control-plane rule), and a session that was
+        asked for the same numbers it already has says nothing at all.
+        """
+        rate = int(sample_rate or self.sample_rate)
+        count_in = self.in_channels if in_channels is None else int(in_channels)
+        count_out = self.out_channels if out_channels is None \
+            else int(out_channels)
+        if (rate, count_in, count_out) == (self.sample_rate, self.in_channels,
+                                           self.out_channels):
+            return
+        with self.control():
+            self.lib.init_audio(count_in, count_out, rate)
+        self.sample_rate = rate
+        self.in_channels = count_in
+        self.out_channels = count_out
+
     @contextmanager
     def control(self):
         """Run a control-plane operation with the stream paused."""

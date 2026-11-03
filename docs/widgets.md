@@ -30,10 +30,12 @@ Widget {
 
 Every constructor the catalog names - `TEXT`, `BUTTON`, `SLIDER`,
 `TOGGLE`, `METER`, `NUMBER`, `VSLIDER`, `RADIO`, `DROPDOWN`, `XY_PAD`,
-`KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PRESET_BAR`, `PANEL`,
-`ICON` - builds one `Widget` and returns a `HostHandle(kind="widget")` the
-script holds onto. `WIDGET(kind, ...)` is the generic form every catalog
-helper wraps.
+`KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PLOT`, `LOGVIEW`,
+`PRESET_BAR`, `PANEL`, `ICON` - builds one `Widget` and returns a
+`HostHandle(kind="widget")` the script holds onto. `WIDGET(kind, ...)` is
+the generic form every catalog helper wraps, and it is how a kind with no
+sugar word of its own is built - `WIDGET("logview")` and `WIDGET("plot")`
+are the same widgets `LOGVIEW(label)` and `PLOT(label)` build.
 
 ## Props
 
@@ -61,6 +63,24 @@ reads, like a Pd inlet index).
 `PROP_DEFINE(kind, name, type, default, ...)` lets a script's own kind
 declare the same shape at runtime, so a custom widget answers to the same
 `GET`/`SET` rules.
+
+## Label and readout placement
+
+A tiny control has no room to write its own name inside its box - a 25x25
+knob cannot fit "Index" and its readout in the dial. Six `_COMMON` rows
+grow onto *every* kind so a word can leave the box: `label_place` and
+`value_place` (the name and the numeric readout) each take one of
+`inside`, `top`, `bottom`, `left`, `right` or `none`, defaulting to
+`inside` so nothing that reads the tables today changes; `label_dx` /
+`label_dy` / `value_dx` / `value_dy` are number nudges in logical pixels,
+applied last.
+
+A side placement anchors the word against the widget's `screen_box` in the
+surrounding margin, and the draw clip widens to reach it - only the clip,
+never the hit rectangle - so a grown label cannot steal a neighbour's
+click. `none` drops the word entirely. Because these are prop rows they are
+validated by `SET`, dumped by `crude widgets --json`, and skipped by
+`PD_EMIT` (they carry no `pd=` inlet name).
 
 ## Style roles
 
@@ -154,6 +174,65 @@ send/recv and warns; the plan's Rule 17.
 `WIDGET_KINDS()` returns the catalog plus every registered custom kind;
 `WIDGET_PROPS(kind)` is the schema a script can read; `WIDGET_HAS(w, prop)`
 is the check that a widget's own kind holds one named prop.
+
+## Canvases
+
+Four kinds draw whatever a script pushes into their `data` / `lines` rows
+rather than a single value - they turn a list into a picture, and the
+script feeds them from `ON_FRAME`:
+
+- `WAVEFORM(label)` - a rolling trace of sample values, the output scope.
+  `SET(w, "data", AUDIO_WAVEFORM(frames))` shows what the patch is playing,
+  and a flat line when it is not.
+- `SPECTRUM(label)` - bands of the same sample list.
+- `PLOT(label)` (or `WIDGET("plot")`) - a line graph of *any* value list,
+  autoscaled to the span the list itself holds: its own min and max set the
+  axis, not a fixed full scale, so `SET(graph, "data",
+  PD_ARRAY_READ(patch, "modindex"))` graphs an array of whatever units it
+  carries. A flat series is a level line, not a divide by zero; an empty
+  list draws the frame and no trace.
+- `LOGVIEW(label)` (or `WIDGET("logview")`) - a scrollable text area. The
+  script appends rows to its `lines` prop and the newest that fit are shown;
+  the wheel moves `scroll` to read older ones. It has no `value` row and no
+  Pd twin - it is a place to read, not to send.
+
+`plot` and `logview` are role `grid` kinds with an empty `pd_object`, so
+they reach the same `GET`/`SET` schema as the rest of the catalog but are
+never emitted to a `.pd` file.
+
+## Menus and dialogs
+
+There is no native menu bar in this project's GLFW windows, so a running
+program's menu is composed entirely from the widgets above: the bar is a
+`PANEL` of `BUTTON`s along the top, each title owns a popup `PANEL` that is a
+child of the window's root (not of the bar) so it can overlap the project's own
+widgets, and each row is a `BUTTON` - or a `TOGGLE` for a tickable row. Whether
+a popup is showing is the `visible` prop, toggled on a title click; a closed
+popup paints nothing, so the whole menu costs a handful of widgets until it is
+opened. Only one popup is on screen at a time: opening one hides whichever was
+before it.
+
+`MENUBAR(name)`, `MENU(bar, title)`, `MENU_ADD(menu, label, fn)`,
+`MENU_CHECK(menu, label, on, fn)`, `MENU_SHOW(menu)` and `MENU_HIDE(menu)`,
+plus the three dialog rows `MENU_AUDIO_DIALOG(menu)`, `MENU_MIDI_DIALOG(menu)`
+and `MENU_SERIAL_DIALOG(menu, link)` (buildings in `bindings/menu.py`, area
+`ui`) drive exactly that composition
+through `UIContext` - `add` for the bar and popups, `NODE_ADD`-style parentage
+for the overlap, and the `Handlers` bridge for a row's click - so nothing needs
+a renderer, a window or a GPU to be tested. The `crude.ui.menu` classes hold
+the same behaviour for a host that would rather build a menu without the
+language.
+
+A settings dialog is the same parts: a popup `PANEL` holding a `DROPDOWN` per
+choice (its `labels` list is the option text, its `value` the chosen index) and
+a `BUTTON` that applies them - the `crude.ui.menu` `MenuDialog`, hung off a menu
+row by `Menu.add_dialog`. The shipped examples' File menu uses one each for
+audio devices (filled from `AUDIO_DEVICES`, applied with `AUDIO_USE_DEVICES`),
+MIDI ports (from `MIDI_DEVICES`, or one disabled row when the list is empty,
+applied with `MIDI_OPEN`) and a serial link's rate (`NUMBER` per link, applied
+with `SET(link, "baud", n)`), plus Save / Load built from `PRESET_SAVE` and
+`PRESET_LOAD`. Each is opened by the one binding named for it, so the dropdowns
+are read from the runtime only when the panel opens and never at load.
 
 ## Pd-parity widgets
 

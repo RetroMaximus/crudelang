@@ -3,7 +3,7 @@
 Every subsystem the loader would otherwise reach for is handed in: ``FakeLibpd``
 for libpd, ``NullBackend`` for a device, a media host that only sizes files, a
 serial host that records what it was asked to open. That is what lets the whole
-fourteen-phase run - and the unwinding of a failed one - be tested on a machine
+fifteen-phase run - and the unwinding of a failed one - be tested on a machine
 with no DLL, no sound and no display.
 
 Two of these tests are the stage's acceptance criteria: ``check`` printing the
@@ -270,6 +270,30 @@ def test_serial_is_off_only_when_the_command_line_says_so(build):
     assert LoadOptions().wants_serial(build()) is False
 
 
+def test_midi_is_only_wanted_when_the_manifest_declares_it(build):
+    """Absent the ``midi`` key a project never builds a runtime; declaring it opts in."""
+    assert LoadOptions().wants_midi(build()) is False
+
+    declared = build(midi={})
+    assert LoadOptions().wants_midi(declared) is True
+    assert LoadOptions(midi=False).wants_midi(declared) is False
+
+    turned_off = build(midi={"enabled": False})
+    assert LoadOptions().wants_midi(turned_off) is False
+
+
+def test_the_midi_backend_and_strict_come_from_the_declared_block(build):
+    declared = build(midi={"backend": "null"})
+    assert LoadOptions().midi_backend(declared) == "null"
+    assert LoadOptions(midi_backend_name="rtmidi").midi_backend(declared) == "rtmidi"
+    # a project that does not want MIDI asks for the silent backend, always
+    assert LoadOptions().midi_backend(build()) == "null"
+
+    assert LoadOptions().midi_strict(build(midi={})) is False
+    assert LoadOptions().midi_strict(
+        build(midi={"optional": False})) is True
+
+
 def test_the_progress_spec_and_the_frame_rate_come_from_either_side(make):
     manifest = make({"loading": {"progress": "json"},
                      "runtime": {"mode": "terminal", "target_fps": 24}})
@@ -298,6 +322,7 @@ def test_the_options_say_what_this_run_decided_for_the_report(build):
         "backend": "null",
         "strict_audio": False,
         "serial": True,
+        "midi": False,
         "progress": "json",
         "fps": 60,
         "rebuild_pd": False,
@@ -309,6 +334,7 @@ def test_the_options_say_what_this_run_decided_for_the_report(build):
         "backend": "null",
         "strict_audio": False,
         "serial": False,
+        "midi": False,
         "progress": "auto",
         "fps": 60,
         "rebuild_pd": False,
@@ -450,6 +476,7 @@ def test_describe_says_what_the_manifest_declared_without_loading_it(fake_projec
         "audio     off",
         "patches   0 declared",
         "serial    off",
+        "midi      off",
     ]
 
 
@@ -528,7 +555,7 @@ def test_a_terminal_project_runs_every_phase_and_reports_each_one(loaded):
     assert [record.name for record in project.report.done] == list(PHASE_NAMES)
     assert project.report.ok
     assert project.report.percent == 100.0
-    assert project.report.summary() == "loaded 14 of 14 steps (100%)"
+    assert project.report.summary() == "loaded 15 of 15 steps (100%)"
     assert project.active is True
     assert str(project) == "Project x (terminal, loaded)"
 
@@ -839,6 +866,59 @@ def test_the_command_line_can_refuse_serial_for_this_run(loaded):
 
 
 # --------------------------------------------------------------------------
+# the midi phase
+# --------------------------------------------------------------------------
+
+
+def test_a_project_that_declares_no_midi_never_builds_a_runtime(loaded):
+    project = loaded(with_audio())
+
+    assert project.midi is None
+    assert mentioned(project, "midi", "MIDI is off for this run")
+
+
+def test_the_midi_phase_builds_a_runtime_on_the_null_backend(loaded):
+    """Declaring ``midi`` opts in; the chain lands on the always-present backend."""
+    from crude.midi import MidiRuntime
+
+    project = loaded(with_audio(midi={"backend": "null"}))
+
+    assert isinstance(project.midi, MidiRuntime)
+    assert project.midi.backend.name == "null"
+    assert mentioned(project, "midi", "null")
+    assert project.host_object().midi is project.midi
+    # a load that opens something records how to close it
+    project.shutdown()
+
+
+def test_the_command_line_can_refuse_midi_for_this_run(loaded):
+    from crude.midi import MidiRuntime
+
+    project = loaded(with_audio(midi={"backend": "null"}),
+                     options=LoadOptions(midi=False, progress="none"))
+
+    assert not isinstance(project.midi, MidiRuntime)
+    assert mentioned(project, "midi", "MIDI is off for this run")
+
+
+def test_a_caller_supplied_midi_runtime_is_the_one_the_host_sees(loaded):
+    class Stub:
+        backend = "injected"
+
+        def attach_program(self, program):
+            self.program = program
+
+        def close_all(self):
+            pass
+
+    stub = Stub()
+    project = loaded(with_audio(midi={"backend": "null"}), midi=stub)
+
+    assert project.midi is stub
+    assert project.host_object().midi is stub
+
+
+# --------------------------------------------------------------------------
 # the entry script
 # --------------------------------------------------------------------------
 
@@ -977,7 +1057,7 @@ def test_a_stop_asked_for_before_the_run_starts_says_so(fake_project):
     assert caught.value.reason == "the person pressed q"
     assert project.report.failed_name == "manifest"
     assert project.report.summary() == \
-        "cancelled at manifest after 0 of 14 steps (0%)"
+        "cancelled at manifest after 0 of 15 steps (0%)"
     assert project.report.lines()[0].startswith("stop manifest")
     # the first boundary was the first step, so nothing was ever opened
     assert project.audio is None
@@ -1024,7 +1104,7 @@ def test_a_key_pressed_during_a_phase_is_a_stop_and_not_a_crash(fake_project):
 
     assert caught.value.reason == "stopped by the user"
     assert project.report.failed_name == "images"
-    assert project.report.summary() == "cancelled at images after 9 of 14 steps (59%)"
+    assert project.report.summary() == "cancelled at images after 9 of 15 steps (59%)"
 
 
 def test_a_phase_that_raises_something_plain_names_the_step_that_failed(fake_project):
@@ -1191,6 +1271,7 @@ def test_the_project_describes_itself_for_the_command_line(loaded):
         "audio     null 44100 Hz, 64 frames/block",
         "patches   2 declared",
         "serial    1 declared",
+        "midi      off",
         "resources 1 image, 0 sound, 0 array, 0 preset",
     ]
 
@@ -1206,7 +1287,7 @@ def test_the_same_story_as_an_object_for_a_machine_to_read(loaded):
     assert info["mode"] == "headless"
     assert info["active"] is True
     assert info["options"] == {"mode": "headless", "audio": True, "backend": "null",
-                               "strict_audio": False, "serial": False,
+                               "strict_audio": False, "serial": False, "midi": False,
                                "progress": "none", "fps": 60, "rebuild_pd": False}
     assert info["resources"] == {"image": 1, "sound": 0, "array": 0, "preset": 0}
     assert info["patches"] == ["one", "two"]

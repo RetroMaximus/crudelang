@@ -11,13 +11,13 @@ from typing import Callable
 
 from ui.renderer import Renderer2D
 
-BAR_H = 30.0
+BAR_H = 45.0
 PAD_X = 10.0
 GAP = 2.0
 TEXT_PX = 7.6
 
 TEXT = (0.86, 0.91, 0.98, 1.0)
-DIM = (0.62, 0.68, 0.78, 1.0)
+DIM = (0.62, 0.68, 0.98, 2.0)
 HOVER = (0.22, 0.30, 0.42, 1.0)
 ACTIVE = (0.25, 0.52, 0.86, 1.0)
 

@@ -63,6 +63,7 @@ def test_a_manifest_hands_over_strings_and_gets_numbers_back():
         ({"in_channels": 0, "out_channels": 0},
          "an audio stream needs at least one input or one output channel"),
         ({"sample_rate": "studio"}, "'studio' is not a number, as sample_rate must be"),
+        ({"delay_ms": "late"}, "'late' is not a number, as delay_ms must be"),
         ({"in_channels": None, "out_channels": None},
          "an audio stream needs at least one input or one output channel"),
     ],
@@ -101,6 +102,42 @@ def test_describe_says_everything_a_log_line_needs():
     assert config.describe() == "48000 Hz, 128-frame blocks, 1 in / 2 out"
     assert str(config) == config.describe()
     assert config.as_dict()["out_channels"] == 2
+
+
+def test_the_latency_the_page_sets_is_the_one_the_device_is_asked_for():
+    """The dialog's delay becomes PortAudio's own ``latency`` argument, nothing else.
+
+    The library drops this straight into a C ``double``, so the only two answers
+    that can be handed to it are a number of seconds and "no preference" - a run
+    that reached ctypes with the word ``"callback"`` in it came back as
+    ``must be real number, not str`` and no audio at all.
+    """
+    assert AudioConfig().latency is None, "no delay means leave it to the library"
+    assert AudioConfig(delay_ms=25.0).latency == 0.025, "milliseconds, in seconds"
+    # the callback switch is about who drives the stream, not its timing target,
+    # so it never has to win over a delay - the two are asked separately
+    assert AudioConfig(delay_ms=10.0, callbacks=False).latency == 0.01
+    assert AudioConfig(callbacks=False).latency is None
+
+
+@pytest.mark.parametrize("delay_ms, callbacks", [
+    (0.0, True), (0.0, False), (12.5, True), (12.5, False),
+])
+def test_a_latency_preference_is_always_a_number_or_nothing_at_all(delay_ms, callbacks):
+    """Whatever the page says, ctypes must be able to hold the answer."""
+    latency = AudioConfig(delay_ms=delay_ms, callbacks=callbacks).latency
+    assert latency is None or isinstance(latency, float)
+
+
+def test_a_multi_device_page_describes_the_devices_it_carries():
+    config = AudioConfig(output_devices=[2, 3], input_devices=[0], delay_ms=5.0)
+    assert config.describe() == (
+        "44100 Hz, 64-frame blocks, 2 in / 2 out, 3 side device(s), 5 ms delay"
+    )
+    assert config.as_dict()["output_devices"] == [2, 3]
+    assert config.as_dict()["input_devices"] == [0]
+    assert AudioConfig(callbacks=False).describe().endswith(
+        "polled without callbacks")
 
 
 # -- devices ------------------------------------------------------------

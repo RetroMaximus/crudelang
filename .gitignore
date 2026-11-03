@@ -15,9 +15,9 @@ htmlcov/
 # IDE
 .idea/
 
-# Local logs
+# Local logs - every project writes one next to itself when it is run
 .logs/
-logs/*.log
+logs/
 
 # Vendored binaries (rebuilt / re-fetched on demand)
 third-party/

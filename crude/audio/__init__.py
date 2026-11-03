@@ -9,7 +9,10 @@ warning, not a failure**. :func:`open_backend` therefore walks a chain - the
 backend a manifest asked for first, then the preferred order - and ends in
 :class:`~crude.audio.null.NullBackend`, which renders blocks on demand with no
 hardware at all. Only a *strict* request raises, and only after naming every
-backend it tried and why each one failed.
+backend it tried and why each one failed. "Warning" is the operative word: every
+fallback is logged by name, and a run that wanted audio and landed on the pulled
+backend is told - in its own output, by the loader - that nothing will be heard.
+Silence is never presented as working sound.
 
 Nothing here imports ``sounddevice`` or ``pyaudio`` at module scope: the adapters
 do it lazily, so importing this package works on a machine with no PortAudio and

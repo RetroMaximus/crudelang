@@ -1,7 +1,10 @@
 """The silent backend: audio without a device.
 
-``NullBackend`` is what the plan calls the "no audio stream" case - headless
-runs, ``--no-audio``, CI and every test. Instead of a PortAudio thread pushing
+``NullBackend`` is what the plan calls the "no audio stream" case - ``--no-audio``,
+a machine whose real backends all failed (the run then says out loud that it
+reached no device), CI and every test. It is *not* what a ``headless`` run means:
+headless only drops the window, and opens the real device if this one exists.
+Instead of a PortAudio thread pushing
 blocks at it, the caller pulls: :meth:`NullBackend.process_block` *is* the libpd
 thread, run exactly when the script says so.
 

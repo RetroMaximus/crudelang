@@ -13,10 +13,11 @@ The plan's four verbs:
 * ``SERIAL_CLOSE(link)`` -> whether it was open,
 * ``ON_SERIAL(link, fn[, kind])`` -> a handler handle (so ``OFF`` can reach it).
 
-A link handle is ``GET``-able (see :data:`crude.serial.link._LINK_PROPS`); it
-is deliberately not writable, the same rule ``AUDIO_INFO`` uses - changing a
-baud rate under a running reader would leave the codec and the device
-disagreeing about what a byte means.
+A link handle is ``GET``-able and partly ``SET``-able (see
+:data:`crude.serial.link._LINK_PROPS` and :data:`crude.serial.link.WRITABLE_PROPS`):
+``baud`` and ``port`` close and reopen the device at the new setting rather than
+leave the reader thread and the codec disagreeing about what a byte means, and
+``codec`` swaps in place without touching the port.
 """
 
 from __future__ import annotations

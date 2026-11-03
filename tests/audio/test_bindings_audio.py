@@ -57,7 +57,8 @@ def chain_program(chain_runtime, audio_program_for):
 
 def test_the_plan_named_exactly_these_audio_bindings():
     assert BINDINGS == (
-        "AUDIO_INFO", "AUDIO_DEVICES", "AUDIO_START", "AUDIO_STOP",
+        "AUDIO_INFO", "AUDIO_DEVICES", "AUDIO_USE_DEVICES", "AUDIO_DEVICE",
+        "AUDIO_START", "AUDIO_STOP",
         "AUDIO_LEVEL", "AUDIO_WAVEFORM",
     )
     for name in BINDINGS:
@@ -68,6 +69,8 @@ def test_the_plan_named_exactly_these_audio_bindings():
 @pytest.mark.parametrize("name,args,optional", [
     ("AUDIO_INFO", (), 0),
     ("AUDIO_DEVICES", ("direction",), 1),
+    ("AUDIO_USE_DEVICES", ("input", "output"), 2),
+    ("AUDIO_DEVICE", (), 0),
     ("AUDIO_START", ("backend",), 1),
     ("AUDIO_STOP", (), 0),
     ("AUDIO_LEVEL", ("channel", "mode"), 2),
@@ -113,9 +116,11 @@ def test_only_a_handle_can_be_asked_for_a_property(audio_failure):
     assert "must be a handle, got number" in error.as_string()
 
 
-def test_an_audio_stream_has_no_writable_properties(audio_program):
-    with pytest.raises(KeyError):
-        audio_program.run('SET(AUDIO_INFO(), "sample_rate", 96000)')
+def test_an_audio_stream_has_no_writable_properties(audio_failure):
+    """A stream's shape is frozen at open, so ``SET`` says so in ``GET``'s voice,
+    not as a raw ``KeyError`` escaping the interpreter."""
+    error = audio_failure('SET(AUDIO_INFO(), "sample_rate", 96000)')
+    assert "audio has no writable properties (asked for 'sample_rate')" in error.as_string()
 
 
 # -- AUDIO_START / AUDIO_STOP -------------------------------------------
@@ -205,11 +210,13 @@ def test_a_mode_has_to_be_text(audio_failure):
     assert "'mode' must be a string, got number" in error.as_string()
 
 
-def test_a_level_needs_a_stream(audio_program_for, config):
+def test_a_level_without_a_stream_reads_silence(audio_program_for, config):
+    """An open runtime holding no device answers 0, it does not raise or mute."""
     program = audio_program_for(AudioRuntime(config=config))
-    _, error = program.run("AUDIO_LEVEL()")
+    value, error = program.run("AUDIO_LEVEL()")
 
-    assert "AUDIO_LEVEL: audio is not open; call AUDIO_START first" in error.as_string()
+    assert error is None
+    assert as_py(value) == 0.0
 
 
 # -- AUDIO_WAVEFORM -----------------------------------------------------
@@ -229,6 +236,17 @@ def test_a_waveform_is_a_list_of_numbers(eval_audio, audio_runtime):
 def test_a_waveform_channel_is_validated(audio_failure):
     error = audio_failure("AUDIO_WAVEFORM(4, 9)")
     assert "audio channel 9 is out of range" in error.as_string()
+
+
+def test_a_waveform_without_a_stream_is_empty_not_an_error(audio_program_for,
+                                                            config):
+    """A scope that runs every frame reads a flat trace, never a mute, on a
+    ``--no-audio`` run: the whole reason the frame handler stays alive."""
+    program = audio_program_for(AudioRuntime(config=config))
+    value, error = program.run("AUDIO_WAVEFORM(256)")
+
+    assert error is None
+    assert as_py(value) == []
 
 
 # -- AUDIO_DEVICES ------------------------------------------------------
@@ -280,8 +298,8 @@ def test_a_direction_is_one_of_three_words(chain_program, no_audio_libraries):
 
 
 @pytest.mark.parametrize("source", [
-    "AUDIO_INFO()", "AUDIO_DEVICES()", "AUDIO_START()", "AUDIO_STOP()",
-    "AUDIO_LEVEL()", "AUDIO_WAVEFORM()",
+    "AUDIO_INFO()", "AUDIO_DEVICES()", "AUDIO_USE_DEVICES(0, 1)", "AUDIO_DEVICE()",
+    "AUDIO_START()", "AUDIO_STOP()", "AUDIO_LEVEL()", "AUDIO_WAVEFORM()",
 ])
 def test_an_unwired_program_says_which_binding_needed_audio(source):
     """A plain REPL program has no ``host.audio``: the error must say so."""

@@ -304,6 +304,40 @@ class SerialLink:
     def props(self) -> dict:
         return {key: _LINK_PROPS[key](self) for key in sorted(_LINK_PROPS)}
 
+    # -- SET()-visible properties --------------------------------------
+    def set_prop(self, name: str, value) -> None:
+        """Write one property through ``SET(link, "...", v)``.
+
+        A serial link is single-baud, so an RX and a TX rate that differ are two
+        declared links, not two knobs on one. ``baud`` and ``port`` cannot be
+        moved under a live device - the reader thread and the codec are both
+        built for whatever the port was opened at - so writing them closes and
+        reopens the device through the same :meth:`open` the link started with,
+        and restarts the reader thread if one was running. ``codec`` only
+        decides how the bytes already flowing get framed, so it swaps in place
+        without touching the port. A miss raises ``KeyError`` so ``SET`` answers
+        with its own "no writable properties" line, the way ``GET`` does.
+        """
+        if name not in WRITABLE_PROPS:
+            raise KeyError(name)
+        thread_was_running = self._thread is not None and self._thread.is_alive()
+
+        if name == "baud":
+            self.baud = int(value)
+        elif name == "port":
+            self.uri = str(value)
+        else:  # "codec"
+            self.codec_name = str(value)
+            self.codec = codec_for(self.codec_name)
+
+        if name in ("baud", "port") and self.opened:
+            self.close()
+            self.open()
+            if thread_was_running:
+                self.start()
+
+        self.log(f"{self.id}: {name} -> {self.get(name) if name in _LINK_PROPS else value}")
+
 
 # -- the GET table ------------------------------------------------------
 
@@ -351,6 +385,11 @@ _LINK_PROPS = {
     "reconnects": _reconnects,
 }
 
+#: The subset of the ``GET`` table that ``SET(link, "...", v)`` writes back, the
+#  same three the File menu's Serial dialog needs to reconfigure a link at run
+#  time. Everything else (counters, ``opened``) is read-only.
+WRITABLE_PROPS = ("baud", "port", "codec")
+
 
 def _event_for(frame: Any, raw: bytes) -> SerialEvent:
     """One inbox entry for one decoded frame; the raw bytes ride along."""
@@ -361,6 +400,7 @@ def _event_for(frame: Any, raw: bytes) -> SerialEvent:
 
 __all__ = [
     "SerialLink",
+    "WRITABLE_PROPS",
     "DEFAULT_BACKOFF_BASE",
     "DEFAULT_BACKOFF_MAX",
     "DEFAULT_MAX_ATTEMPTS",

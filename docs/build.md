@@ -1,5 +1,26 @@
 <a id="top"></a>
 
+## Optional runtime dependencies
+
+The bundler below collects libpd and the packages a project needs to run. Two
+dependencies are deliberately *optional* rather than hard pins, because the
+engine degrades gracefully when neither is installed:
+
+- `sounddevice` - the live audio backend. Without it the runtime falls back to
+  the :class:`~crude.audio.NullBackend`, so a build still runs (silently) and
+  every `AUDIO_*` binding still answers from its taps.
+- `python-rtmidi` - the MIDI backend. `crude.midi` imports `rtmidi` lazily,
+  inside the methods that need it; when the module is absent
+  `RtMidiBackend.available()` is false, `MIDI_DEVICES(...)` lists nothing, and
+  the File menu's MIDI dialog shows one disabled "no MIDI devices" row instead
+  of raising. See `midi.md`.
+
+`requirements.txt` lists `python-rtmidi` under a comment, not pinned, for the
+same reason: no cp314 wheel is guaranteed to exist, so it must never be a hard
+install requirement that fails a `pip install` on a newer interpreter. A machine
+whose wheel is present (the cp312 wheel imports cleanly today) gets real ports
+with no further configuration.
+
 ## Table of Contents
 
 ### Functions:

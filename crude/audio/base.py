@@ -88,7 +88,13 @@ class AudioUnavailable(AudioError):
 
 @dataclass
 class AudioConfig:
-    """What the stream should look like: rates, block size, channel counts."""
+    """What the stream should look like: rates, block size, channel counts.
+
+    The settings a Pure Data "Media" panel offers and this language does not
+    carry per-stream (backend choice, channel counts) stay out; everything the
+    dialog can edit is here, because a dialog that edits a field the runtime
+    ignores is the one kind of fake this project refuses.
+    """
 
     sample_rate: int = DEFAULT_SAMPLE_RATE
     block_size: int = DEFAULT_BLOCK_SIZE
@@ -96,6 +102,19 @@ class AudioConfig:
     out_channels: int = 2
     input_device: Any = None
     output_device: Any = None
+    #: extra output devices the rendered block is copied to once the primary
+    #  stream is open - what the dialog's "multiple devices" switch buys
+    output_devices: Any = ()
+    #: the same on the input side: extra devices whose blocks are mixed into
+    #  every block the session reads
+    input_devices: Any = ()
+    #: milliseconds of extra latency asked of the device - Pure Data's "delay"
+    delay_ms: float = 0.0
+    #: True hands the device a callback and PortAudio's thread calls the renderer
+    #  from it; False opens the stream callback-less and crude pumps blocks with
+    #  its own thread, which is what unchecking "use callbacks if possible"
+    #  means in Pure Data's Media panel - the same two shapes Pd itself offers
+    callbacks: bool = True
 
     def __post_init__(self) -> None:
         # Coerce first, then validate: a manifest hands over strings, and
@@ -107,6 +126,13 @@ class AudioConfig:
             except (TypeError, ValueError):
                 raise AudioError(f"'{value}' is not a number, as {name} must be")
             setattr(self, name, max(coerced, 0) if name.endswith("channels") else coerced)
+        try:
+            self.delay_ms = float(self.delay_ms or 0.0)
+        except (TypeError, ValueError):
+            raise AudioError(f"'{self.delay_ms}' is not a number, as delay_ms must be")
+        self.callbacks = bool(self.callbacks)
+        self.output_devices = tuple(self.output_devices or ())
+        self.input_devices = tuple(self.input_devices or ())
 
         if self.sample_rate < 1:
             raise AudioError(f"a sample rate must be positive, got {self.sample_rate}")
@@ -125,6 +151,22 @@ class AudioConfig:
     def in_frame_size(self) -> int:
         return self.block_size * max(self.in_channels, 1)
 
+    @property
+    def latency(self) -> Optional[float]:
+        """What to hand PortAudio's ``latency`` for these settings, or ``None``.
+
+        The library puts this straight into a C ``double``, so it takes a number
+        of seconds, the words ``"low"``/``"high"`` it looks up itself, or nothing
+        at all - a preference of any other shape is a type error on the way in.
+        Only the dialog's delay becomes a number here, and ``None`` means "keep
+        your own default". The callback switch is about *who drives* the stream,
+        not about its timing target, so it is asked of the device separately and
+        the two never have to win over each other.
+        """
+        if self.delay_ms > 0:
+            return self.delay_ms / 1000.0
+        return None
+
     def ticks_for(self, frames: int) -> int:
         """How many Pd ticks ``frames`` is: one block = one tick, normally."""
         return max(int(frames) // self.block_size, 1)
@@ -133,10 +175,18 @@ class AudioConfig:
         return replace(self, **kwargs)
 
     def describe(self) -> str:
-        return (
+        said = (
             f"{self.sample_rate} Hz, {self.block_size}-frame blocks, "
             f"{self.in_channels} in / {self.out_channels} out"
         )
+        extra = len(self.output_devices) + len(self.input_devices)
+        if extra:
+            said += f", {extra} side device(s)"
+        if self.delay_ms:
+            said += f", {self.delay_ms:g} ms delay"
+        if not self.callbacks:
+            said += ", polled without callbacks"
+        return said
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -146,6 +196,10 @@ class AudioConfig:
             "out_channels": self.out_channels,
             "input_device": self.input_device,
             "output_device": self.output_device,
+            "input_devices": list(self.input_devices),
+            "output_devices": list(self.output_devices),
+            "delay_ms": self.delay_ms,
+            "callbacks": self.callbacks,
         }
 
     def __str__(self):
@@ -747,6 +801,16 @@ class AudioBackend:
         if self.running:
             return "running"
         return "open" if self.opened else "closed"
+
+    def side_devices(self) -> int:
+        """How many extra devices this backend actually put on a stream.
+
+        ``0`` for a backend that can only talk to one device at a time. The
+        runtime reads it before it claims a multi-device page is live, so a
+        switch the backend cannot honour is said out loud instead of being
+        pretended by a config that merely lists the devices.
+        """
+        return 0
 
     @property
     def level(self) -> float:

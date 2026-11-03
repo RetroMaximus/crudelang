@@ -229,11 +229,12 @@ def test_a_mode_that_is_not_a_meter_mode_is_named_as_one(config):
         runtime.level(5)
 
 
-def test_reading_a_level_needs_a_stream(config):
+def test_a_level_without_a_stream_is_silence_not_an_error(config):
+    """No device means a flat zero, so a per-frame meter never trips a mute."""
     runtime = AudioRuntime(config=config)
 
-    with pytest.raises(AudioError, match=r"audio is not open; call AUDIO_START first"):
-        runtime.level()
+    assert runtime.level() == 0.0
+    assert runtime.waveform() == []
 
 
 def test_a_waveform_is_the_recent_mix_oldest_first(audio_runtime):
@@ -344,3 +345,113 @@ def test_a_runtime_used_as_a_context_manager_starts_and_stops(config):
     with AudioRuntime(config=config, backend=backend) as runtime:
         assert runtime.running and backend.running
     assert backend.opened is False and runtime.stops == 0
+
+
+# -- the settings page, applied while the show runs ---------------------
+
+
+def test_the_whole_page_is_decided_once_and_libpd_is_re_clocked_with_it(
+        config, pd_session):
+    """Devices, rate, blocksize, delay and the callback preference go in together
+    - and the DSP follows the rate the speakers got, or every pitch would shift.
+    """
+    backend = NullBackend(config, render=RecordingRender(value=0.0))
+    runtime = AudioRuntime(session=pd_session, config=config, backend=backend)
+    runtime.start()
+
+    said = runtime.apply_settings(sample_rate=44100, block_size=128,
+                                  delay_ms=10.0, callbacks=False)
+    assert runtime.config.sample_rate == 44100
+    assert runtime.config.block_size == 128
+    assert runtime.config.delay_ms == 10.0
+    assert runtime.config.callbacks is False
+    assert runtime.config.latency == 0.01
+    assert pd_session.sample_rate == 44100, "the session followed the device"
+    assert pd_session.lib.audio_format == (2, 2, 44100)
+    assert runtime.running, "the sound moved, it did not stop"
+    assert said.startswith("audio on "), "the page answers in words"
+    runtime.close()
+
+
+def test_a_rate_that_is_already_the_rate_says_nothing_to_libpd(config, pd_session):
+    """A page applied without moving the clock does not re-init the DSP."""
+    backend = NullBackend(config, render=RecordingRender(value=0.0))
+    runtime = AudioRuntime(session=pd_session, config=config, backend=backend)
+    runtime.start()
+    before = pd_session.lib.audio_format
+
+    runtime.apply_settings(block_size=256)
+    assert pd_session.lib.audio_format == before == (2, 2, 48000)
+    runtime.close()
+
+
+def test_a_blocksize_that_is_not_whole_pd_ticks_is_refused_by_name(config):
+    """Pd's vector is 64 frames: a block that is not a whole number of ticks
+    would drop the remainder every callback, so the page is refused up front."""
+    runtime = AudioRuntime(config=config, backend=NullBackend(config))
+    runtime.open()
+
+    with pytest.raises(AudioError, match=r"a block size must be whole Pd ticks - "
+                                         r"64, 128, 256, 512, 1024, 2048 - got 96"):
+        runtime.apply_settings(block_size=96)
+    assert runtime.config.block_size == 64, "nothing was half-applied"
+    runtime.close()
+
+
+def test_a_stream_that_will_not_take_the_page_keeps_the_old_settings(
+        config, stub_sounddevice):
+    """A refused reopen is said, and what plays is still what played before."""
+    stub = stub_sounddevice()
+    backend = SoundDeviceBackend(config, render=RecordingRender(value=0.0))
+    runtime = AudioRuntime(config=config, backend=backend,
+                           preferred="sounddevice", strict=True)
+    runtime.start()
+    # the next open - the one Apply asks for - is the one that fails
+    stub.open_error = "Device is busy"
+
+    with pytest.raises(AudioUnavailable, match="could not open"):
+        runtime.apply_settings(sample_rate=96000)
+    assert runtime.config.sample_rate == 48000
+    assert [note for note in runtime.notes if "settings were not applied" in note]
+    runtime.close()
+
+
+def test_extra_devices_a_backend_cannot_open_are_said_rather_than_claimed(config):
+    """The ``null`` stream has one device, so a multi-device page says exactly
+    that instead of letting the person believe two speakers are live."""
+    runtime = AudioRuntime(config=config, backend=NullBackend(config))
+    runtime.open()
+
+    said = runtime.apply_settings(extra_output_devices=(2,),
+                                  extra_input_devices=(0,))
+    assert "2 extra device(s) got no stream of their own from null" in said
+    assert runtime.config.output_devices == (2,)
+    assert runtime.config.input_devices == (0,)
+    runtime.close()
+
+
+def test_extra_devices_a_backend_does_open_are_not_commented_on(config,
+                                                                stub_sounddevice):
+    stub_sounddevice()
+    runtime = AudioRuntime(config=config, backend=SoundDeviceBackend(config))
+    runtime.open()
+
+    said = runtime.apply_settings(extra_output_devices=(2,),
+                                  extra_input_devices=(0,))
+    assert "got no stream of their own" not in said
+    assert said.count("side device") == 1, "the config line already counts them"
+    assert runtime.backend.side_devices() == 2
+    runtime.close()
+
+
+def test_a_run_that_opened_no_stream_remembers_the_page_and_opens_nothing(
+        config):
+    """``--no-audio`` is not overridden by a menu: the page waits, and says so."""
+    runtime = AudioRuntime(config=config)
+
+    said = runtime.apply_settings(sample_rate=96000, block_size=512)
+    assert runtime.backend is None
+    assert runtime.opened is False
+    assert runtime.config.sample_rate == 96000 and runtime.config.block_size == 512
+    assert said.startswith("audio is not open in this run")
+    assert "96000 Hz, 512-frame blocks" in said

@@ -4,8 +4,8 @@
 this module ever *ran* it. A :class:`Runtime` is that running: one project, one
 clock, and the plan's tick order repeated until something stops it -
 
-    pump input → drain PdInbox → drain serial inbox → run ``ON_FRAME``
-    handlers → dispatch UI events → draw → swap → pace
+    pump input → drain PdInbox → drain serial inbox → drain MIDI inbox →
+    run ``ON_FRAME`` handlers → dispatch UI events → draw → swap → pace
 
 with shutdown in the plan's order too: stop the stream, close the patches,
 let the project's undo stack put the rest back, and the window last. The loop
@@ -96,6 +96,7 @@ class Runtime:
         self._last = 0.0
         self.events = 0
         self.serial_events = 0
+        self.midi_events = 0
         self.frame_reports: List[Any] = []
         self.budget_hits = 0
         self.paces = 0.0
@@ -126,7 +127,7 @@ class Runtime:
     def activate(self, project: Any = None) -> "Runtime":
         """Take over a project: its window if there is one, the UI it implies.
 
-        Called by phase 14 (and by any caller that hands a runtime in), this
+        Called by phase 15 (and by any caller that hands a runtime in), this
         decides the mode - asking :mod:`crude.runtime.modes` whether a window
         is *possible* here, and downgrading with a message when it is not -
         builds the :class:`~crude.ui.context.UIContext` the ``WIDGET`` bindings
@@ -292,7 +293,12 @@ class Runtime:
         audio = self._project_field("audio")
         if audio is None or not self._mode.audio_started:
             return
-        if getattr(audio, "running", False) or getattr(audio, "live", True):
+        if getattr(audio, "running", False):
+            return
+        if not getattr(audio, "live", False):
+            # A pulled (null) backend has no OS thread to start: its blocks are
+            # rendered by :meth:`tick_audio` on the loop's own beat, so nothing
+            # is gained by calling ``start`` and it would double the meters.
             return
         try:
             audio.start()
@@ -340,6 +346,20 @@ class Runtime:
             return 0
         return int(dispatch())
 
+    def drain_midi(self) -> int:
+        """Deliver everything the MIDI ports received since the last frame.
+
+        The same shape as :meth:`drain_serial` and for the same reason: a
+        backend's own thread only ever queues, and the interpreter gets the
+        messages here, one drain per tick. A project with no ``midi`` section
+        has no runtime to ask, so this is a plain zero and says nothing.
+        """
+        midi = self._project_field("midi")
+        dispatch = getattr(midi, "dispatch", None)
+        if not callable(dispatch):  # no ports, or a host that cannot deliver
+            return 0
+        return int(dispatch())
+
     def step(self) -> Optional[Any]:
         """One frame in the plan's order; its report, or ``None`` when skipped.
 
@@ -353,6 +373,7 @@ class Runtime:
             return None
         self.drain_pd()
         self.serial_events += self.drain_serial()
+        self.midi_events += self.drain_midi()
 
         started = self.clock.now()
         dt = max(0.0, started - self._last)
@@ -511,6 +532,7 @@ class Runtime:
             "ticks": self.ticks,
             "events": self.events,
             "serial": self.serial_events,
+            "midi": self.midi_events,
             "budget_hits": self.budget_hits,
             "paced": round(self.paces, 6),
             "audio_ticks": getattr(audio, "ticks", 0),

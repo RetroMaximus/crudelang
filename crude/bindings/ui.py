@@ -110,6 +110,7 @@ CONSTRUCTORS: dict = {
         # arguments come straight out of the kind's own ``args``, so
         # ``ADSR(label, a, d, s, r)`` and five SETs are the same five numbers
         ("WAVEFORM", "waveform"), ("SPECTRUM", "spectrum"),
+        ("PLOT", "plot"), ("LOGVIEW", "logview"),
         ("ADSR", "adsr"), ("CURVE", "curve"), ("XY_PAD", "xy"),
         ("KEYBED", "keybed"), ("PRESET_BAR", "preset_bar"),
     )

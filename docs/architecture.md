@@ -96,8 +96,10 @@ pace                → :meth:`Clock.sleep` holds the frame to ``target_fps``
 ```
 
 Nothing here is a thread of its own: the audio stream pulls blocks in
-:meth:`Runtime.tick_audio` for a headless run, and a live sounddevice
-callback renders them outside the loop. Pd's audio thread and the interpreter
+:meth:`Runtime.tick_audio` when the run has no device thread (``--no-audio``,
+or a machine where no real backend opened), and a live sounddevice
+callback renders them outside the loop - a ``headless`` run with a working
+device is in that second group, heard, not simulated. Pd's audio thread and the interpreter
 thread are separated by :class:`PdInbox`, and the serial reader thread is
 separated from both by :class:`SerialInbox`, which is why a ``ON_PD`` handler
 can safely call ``PD_SEND`` without a lock.

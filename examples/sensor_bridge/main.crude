@@ -1,8 +1,10 @@
-# main.crude: a serial port in, Pure Data out.
+# main.crude: a serial port in, Pure Data out - and a window to drive it by hand.
 #
-# Headless on purpose: this is the shape that runs on a Pi over SSH, with no
-# window and no widget tree, and it is the same program as the windowed one -
-# the mode changes what is drawn, never what is wired.
+# The serial half is unchanged: one declared link, ``arduino``, whose every line
+# is a sensor reading fed to the patch. The window half is new: a level slider,
+# a Test button and a scope mean the same program is audible and inspectable with
+# no hardware on the bench - the mode changes what is drawn, never what is wired,
+# and both the slider and the port write the one ``level`` receiver.
 #
 # Two patches are in play, which is the normal Pd way of doing things:
 #
@@ -31,16 +33,76 @@ PD_LINK(p, amp, out)
 PD_LINK(p, amp, out, 0, 1)
 PD_LOAD(p)
 
+# The panel. A slider, a Test button and a DSP toggle all write the same two
+# receivers the port does - "level" (which sensors.pd turns into a pitch) and the
+# DSP switch - so the voice is audible with nothing plugged in. The scope reads
+# the output every frame; the log keeps the last few readings, from either hand.
+VAR title = TEXT("SENSOR BRIDGE")
+VAR vlevel = VSLIDER("Level", 0, 1023, 0)
+VAR test  = BUTTON("Test")
+VAR dsp   = TOGGLE("DSP", 1)
+VAR scope = WAVEFORM("output")
+VAR log   = LOGVIEW("readings")
+
+PLACE(title,  16, 36, 200, 20)
+PLACE(vlevel, 20, 68, 36, 200)
+PLACE(test,   72, 68, 96, 28)
+PLACE(dsp,    72, 104, 96, 28)
+PLACE(scope,  188, 68, 156, 120)
+PLACE(log,    72, 228, 272, 88)
+
+ON_CHANGE(vlevel, FUNC(v) -> PD_SEND(p, "level", v))
+ON_CHANGE(dsp, FUNC(v) -> PD_DSP(v))
+
+FUNC on_test(v)
+    PD_SEND(p, "level", 512)
+    SET(vlevel, "value", 512)
+END
+ON_CHANGE(test, on_test)
+
 # One declared link, by the id the manifest gives it. The codec is "line", so
 # what the handler gets is one line of text per call, off the reader thread and
-# on this one, where it is safe to talk to Pd.
+# on this one, where it is safe to talk to Pd. It writes the same "level" the
+# slider does, mirrors itself back onto the slider, and pushes the reading onto
+# the log's tail.
 VAR port = SERIAL_OPEN("arduino")
 
 FUNC on_line(text)
-    PD_SEND(p, "level", NUM(text))
+    VAR level = NUM(text)
+    PD_SEND(p, "level", level)
+    SET(vlevel, "value", level)
+    VAR cur = GET(log, "lines")
+    APPEND(cur, "level " + STR(level))
+    WHILE LEN(cur) > 6 THEN
+        POP(cur, 0)
+    END
+    SET(log, "lines", cur)
 END
 
 ON_SERIAL(port, on_line)
+
+FUNC on_frame(dt)
+    SET(scope, "data", AUDIO_WAVEFORM(256))
+END
+ON_FRAME(on_frame)
+
+# The runtime menu, built from ordinary widgets by the reusable MENU_* framework
+# (see docs/widgets.md). A link is single-baud, so the Serial rows change the one
+# declared ``arduino`` link's rate - the writable-baud path (SET(link,"baud",n)) -
+# and nothing is queried on a device until a person clicks a row.
+VAR bar         = MENUBAR("menu")
+VAR file_menu   = MENU(bar, "File")
+VAR audio_menu  = MENU(bar, "Audio")
+VAR midi_menu   = MENU(bar, "MIDI")
+VAR serial_menu = MENU(bar, "Serial")
+
+MENU_ADD(file_menu, "Save level", FUNC() -> PRESET_SAVE("sensor-bridge", GET(vlevel, "value")))
+MENU_ADD(file_menu, "Load level", FUNC() -> SET(vlevel, "value", PRESET_LOAD("sensor-bridge")))
+MENU_ADD(audio_menu, "Unmute", FUNC() -> PD_DSP(1))
+MENU_ADD(audio_menu, "Mute", FUNC() -> PD_DSP(0))
+MENU_AUDIO_DIALOG(audio_menu)
+MENU_MIDI_DIALOG(midi_menu)
+MENU_SERIAL_DIALOG(serial_menu, port)
 
 # A port that stops talking is a bug in the firmware, not a reason to exit, so
 # the link is declared "optional" in the manifest and the run carries on without

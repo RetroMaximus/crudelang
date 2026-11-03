@@ -48,6 +48,7 @@ from ..project import (
     Reporter,
     build_manifest,
     known_backends,
+    known_midi_backends,
     make_reporter,
     open_project,
 )
@@ -126,6 +127,8 @@ def _options(args: argparse.Namespace) -> LoadOptions:
         audio=args.audio,
         backend=args.backend,
         serial=False if args.no_serial else None,
+        midi=False if args.no_midi else None,
+        midi_backend_name=args.midi_backend,
         progress=args.progress,
         fps=args.fps,
         log=args.log,
@@ -456,6 +459,10 @@ def _add_overrides(parser: argparse.ArgumentParser) -> None:
                         help="which audio backend to start with")
     parser.add_argument("--no-serial", action="store_true",
                         help="do not open the declared serial links")
+    parser.add_argument("--no-midi", action="store_true",
+                        help="do not open the declared MIDI backend at all")
+    parser.add_argument("--midi-backend", choices=known_midi_backends(),
+                        default=None, help="which MIDI backend to start with")
     parser.add_argument("--progress", choices=SPECS, default=None,
                         help="how to report the load steps")
     parser.add_argument("--fps", type=_positive, default=None, metavar="N",

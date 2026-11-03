@@ -493,6 +493,54 @@ def test_serial_must_be_a_list_of_links(error):
 
 
 # --------------------------------------------------------------------------
+# midi
+# --------------------------------------------------------------------------
+
+def test_declaring_the_midi_block_opts_the_project_in(root):
+    """An empty ``midi`` section means "want MIDI, take whatever backend works"."""
+    manifest = build_manifest({"midi": {}}, root=str(root))
+
+    assert manifest.midi.enabled is True
+    assert manifest.midi.optional is True
+    assert manifest.midi.strict is False
+
+
+def test_a_project_that_says_nothing_about_midi_is_not_a_midi_project(root):
+    manifest = build_manifest({"id": "x"}, root=str(root))
+
+    assert manifest.midi.enabled is False
+    assert manifest.midi.strict is False
+
+
+def test_midi_can_be_declared_but_turned_off(root):
+    manifest = build_manifest({"midi": {"enabled": False}}, root=str(root))
+
+    assert manifest.midi.enabled is False
+
+
+def test_a_non_optional_midi_block_is_strict(root):
+    manifest = build_manifest({"midi": {"optional": False}}, root=str(root))
+
+    assert manifest.midi.enabled is True
+    assert manifest.midi.strict is True
+
+
+def test_the_midi_backend_name_is_checked_against_the_registry(error):
+    error({"midi": {"backend": "notreal"}},
+          contains="no MIDI backend named 'notreal'")
+
+
+def test_a_known_midi_backend_is_accepted(root):
+    manifest = build_manifest({"midi": {"backend": "rtmidi"}}, root=str(root))
+
+    assert manifest.midi.backend == "rtmidi"
+
+
+def test_an_unknown_midi_key_is_a_typo_the_schema_notices(error):
+    error({"midi": {"colour": "blue"}}, contains="unexpected key 'colour'")
+
+
+# --------------------------------------------------------------------------
 # resources
 # --------------------------------------------------------------------------
 
@@ -619,7 +667,7 @@ def test_the_rewritten_file_keeps_the_declaration_order(root, data):
 
     assert list(manifest.as_dict()) == [
         "$schema", "id", "name", "entry", "runtime", "ui", "audio", "pd",
-        "serial", "resources", "loading",
+        "serial", "midi", "resources", "loading",
     ]
 
 

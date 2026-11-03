@@ -66,6 +66,82 @@ def _levels(values: Sequence[Any], low: float, high: float) -> List[float]:
     return out
 
 
+#: the edges a name or a readout can be pushed outside the box on. ``inside``
+#  and ``none`` are handled by the caller; a side is drawn by :func:`placed_text`.
+SIDES = ("top", "bottom", "left", "right")
+
+
+def placement(widget: Any, which: str) -> Tuple[str, float, float]:
+    """Where a word goes and how far to nudge it: ``(mode, dx, dy)``.
+
+    ``which`` is ``"label"`` or ``"value"``; the two read the matching pair of
+    rows the table gives every kind, at the inside default when a widget is too
+    small to have been told otherwise. Reading through the props rather than the
+    ``_state`` map means a script kind that restated a row still answers.
+    """
+    props = widget.kind.props
+    if f"{which}_place" in props:
+        place = widget.get(f"{which}_place") or "inside"
+    else:
+        place = "inside"
+    dx = float(widget.get(f"{which}_dx")) if f"{which}_dx" in props else 0.0
+    dy = float(widget.get(f"{which}_dy")) if f"{which}_dy" in props else 0.0
+    return place, dx, dy
+
+
+def placed_text(widget: Any, renderer: Any, found: Any, text: Any,
+                place: str, dx: float = 0.0, dy: float = 0.0,
+                *, size: float = None) -> int:
+    """Draw one word against the side of the widget's box - outside it.
+
+    Anchoring is on ``screen_box`` (absolute), so "outside the knob" means
+    outside the knob's own frame, in the panel margin around it. The clip the
+    widget was resolved with is grown on that side (see
+    :meth:`~crude.ui.widget.Widget._resolve`) so the word is not cut. ``inside``
+    and ``none`` are the caller's business and answer zero here.
+    """
+    if not text or place not in SIDES:
+        return 0
+    size = found.font if size is None else size
+    line = size * TEXT_HEIGHT
+    left, top, width, height = widget.screen_box
+    gap = max(found.width, 1.0)
+    mid_y = top + (height - line) * 0.5
+    if place == "top":
+        renderer.text(left + width * 0.5 + dx, top - line - gap + dy,
+                      str(text), size, found.ink, align="center")
+    elif place == "bottom":
+        renderer.text(left + width * 0.5 + dx, top + height + gap + dy,
+                      str(text), size, found.ink, align="center")
+    elif place == "left":
+        renderer.text(left - gap + dx, mid_y + dy, str(text), size,
+                      found.ink, align="right")
+    else:  # right
+        renderer.text(left + width + gap + dx, mid_y + dy, str(text), size,
+                      found.ink, align="left")
+    return 1
+
+
+def draw_word(widget: Any, renderer: Any, found: Any, text: Any, which: str,
+              size: float, inside: Callable[[], int]) -> int:
+    """Draw one word at wherever its ``which`` placement says.
+
+    ``inside`` is a closure holding the face's own centred placement, called
+    when the word stays in the box; a side hands it to :func:`placed_text`, and
+    ``none`` draws nothing. This is the one branch every face shares, so a knob
+    and a slider agree about what ``label_place='left'`` means.
+    """
+    if not text:
+        return 0
+    place, dx, dy = placement(widget, which)
+    if place == "none":
+        return 0
+    if place in SIDES:
+        return placed_text(widget, renderer, found, text, place, dx, dy,
+                           size=size)
+    return inside()
+
+
 def _plot_waveform(widget: Any, renderer: Any, skin: Skin,
                    found: Any) -> int:
     """The oscilloscope: one trace across the plate, centred on silence.
@@ -127,6 +203,95 @@ def _plot_spectrum(widget: Any, renderer: Any, skin: Skin,
         renderer.rect(left + index * slot + (slot - side) * 0.5,
                       top + height - height_now, side, height_now,
                       found.ink)
+    return renderer.op_count - before
+
+
+def _draw_plot(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The line graph: one polyline over the value list, autoscaled to what it holds.
+
+    A waveform plots samples against a fixed -1..+1 full scale; a plot has no such
+    scale, so it reads its own span off the data and stretches the tallest peak to
+    the top of the plate and the lowest trough to the bottom - which is what lets
+    one kind graph a modindex array (0..12) and a filter sweep (20..20000) with the
+    same code, because the array's own min and max become the axis. A flat series
+    (every value equal) would divide by zero, so it is given a one-unit span centred
+    on the value and draws as the straight line it is. The baseline is drawn where the
+    value 0 falls inside the span, which is the one grid line that means something on
+    a graph of signed numbers.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    held: List[float] = []
+    for value in (widget.get("data") or ()):
+        try:
+            held.append(float(value))
+        except (TypeError, ValueError):
+            held.append(0.0)
+    wanted = int(widget.get("points") or 0)
+    if wanted > 0:
+        held = held[:wanted]
+    if held:
+        low, high = min(held), max(held)
+    else:
+        low, high = 0.0, 1.0
+    if high <= low:
+        low, high = low - 0.5, high + 0.5
+    span = high - low
+    guide = skin.resolve("grid", "hover").ink
+    renderer.line((left, top + height), (left + width, top + height), color=guide)
+    if low <= 0.0 <= high:
+        zero = top + height * (high - 0.0) / span
+        renderer.line((left, zero), (left + width, zero), color=guide)
+    if not held:
+        return renderer.op_count - before
+    step = width / max(len(held) - 1, 1)
+    points: List[Point] = [
+        (left + index * step, top + height * (high - value) / span)
+        for index, value in enumerate(held)
+    ]
+    if len(points) == 1:
+        renderer.rect(points[0][0] - 0.5, points[0][1] - 0.5, 1.0, 1.0, found.ink)
+    else:
+        renderer.polyline(points, color=found.ink)
+    return renderer.op_count - before
+
+
+def _draw_logview(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The scrollable text: the newest lines that fit, the wheel moving up for older.
+
+    ``lines`` is a list a script appends to; the plate is a window onto its tail,
+    oldest at the top and the newest at the bottom when ``scroll`` is 0, exactly as a
+    terminal reads. Scrolling counts whole lines up from the newest, so the number is
+    a position in the log rather than a pixel offset, and a window that grew taller
+    between frames still shows the same lines it was asked for. Words past the box are
+    left off by the widget's own clip - a log view truncates, it does not wrap.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    rows = [str(line) for line in (widget.get("lines") or ())]
+    if not rows:
+        return renderer.op_count - before
+    line_h = found.font * TEXT_HEIGHT
+    fit = max(1, int(height // line_h))
+    scroll = int(round(float(widget.get("scroll") or 0.0)))
+    # the wheel may travel only as far as the oldest *page*, not the oldest single
+    # line: clamping to len(rows) - 1 would scroll the newest lines off and leave a
+    # near-empty plate showing one row, so the top of the box is the real limit
+    scroll = max(0, min(scroll, max(0, len(rows) - fit)))
+    bottom = len(rows) - 1 - scroll
+    start = bottom - (fit - 1)
+    for slot in range(fit):
+        index = start + slot
+        if index < 0:
+            continue
+        if index >= len(rows):
+            break
+        renderer.text(left, top + slot * line_h, rows[index], found.font,
+                      found.ink, align="left")
     return renderer.op_count - before
 
 
@@ -316,7 +481,9 @@ def _draw_slider(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
     from .behaviour import fraction_of
     vertical = _is_vertical(widget)
     text = widget.label or found.glyph
-    band = found.font * TEXT_HEIGHT if (text and vertical) else 0.0
+    label_place = placement(widget, "label")[0]
+    band = (found.font * TEXT_HEIGHT
+            if (text and vertical and label_place == "inside") else 0.0)
     thick = min(width if vertical else height, 24.0)
     ruler = max(0.0, (height if vertical else width) - band)
     side = max(3.0, min(thick * 0.6, ruler * 0.16))
@@ -340,12 +507,15 @@ def _draw_slider(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
         renderer.rect(x, y, along, thick, fill)
         renderer.rect(x + along, y, side, thick, thumb)
     if text:
-        if vertical:
-            renderer.text(left + width * 0.5, top, text, found.font,
-                          found.ink, align="center")
-        else:
-            renderer.text(left + ruler * 0.5, y + (thick - found.font) * 0.5,
-                          text, found.font, found.ink, align="center")
+        def inside():
+            if vertical:
+                renderer.text(left + width * 0.5, top, text, found.font,
+                              found.ink, align="center")
+            else:
+                renderer.text(left + ruler * 0.5, y + (thick - found.font) * 0.5,
+                              text, found.font, found.ink, align="center")
+            return 1
+        draw_word(widget, renderer, found, text, "label", found.font, inside)
     return renderer.op_count - before
 
 
@@ -456,9 +626,16 @@ def _draw_knob(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
     from .behaviour import fraction_of
     cx = left + width * 0.5
     label_size = found.font * 0.75
-    label_h = label_size * TEXT_HEIGHT if widget.label else 0.0
     value_size = found.font * 0.75
-    value_h = value_size * TEXT_HEIGHT if widget.has_value else 0.0
+    label_place = placement(widget, "label")[0]
+    value_place = placement(widget, "value")[0]
+    # a name or a number pushed to a side leaves the dial the whole box to turn
+    # in; only words staying "inside" cost it a strip of its height, which is
+    # why a 25x25 knob with label_place='top' still gets a full-size dial
+    label_h = (label_size * TEXT_HEIGHT
+               if widget.label and label_place == "inside" else 0.0)
+    value_h = (value_size * TEXT_HEIGHT
+               if widget.has_value and value_place == "inside" else 0.0)
     pad = max(found.width, 1.0)
     dial_top = top + label_h
     dial_height = max(0.0, height - label_h - value_h)
@@ -493,12 +670,23 @@ def _draw_knob(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
                   (cx + face * math.cos(pointer), cy + face * math.sin(pointer)),
                   thickness=pad * 2, color=found.ink)
     middle = left + width * 0.5
-    if widget.label:
+
+    def label_inside():
         renderer.text(middle, top, widget.label, label_size, found.ink,
                       align="center")
-    if widget.has_value:
+        return 1
+
+    def value_inside():
         renderer.text(middle, top + height - value_size, widget.readout(),
                       value_size, found.ink, align="center")
+        return 1
+
+    if widget.label:
+        draw_word(widget, renderer, found, widget.label, "label", found.font,
+                  label_inside)
+    if widget.has_value:
+        draw_word(widget, renderer, found, widget.readout(), "value",
+                  found.font, value_inside)
     return renderer.op_count - before
 
 
@@ -511,6 +699,8 @@ def _draw_knob(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
 FACES: Dict[str, Face] = {
     "waveform": _plot_waveform,
     "spectrum": _plot_spectrum,
+    "plot": _draw_plot,
+    "logview": _draw_logview,
     "adsr": _draw_envelope,
     "curve": _draw_curve,
     "xy": _draw_pad,

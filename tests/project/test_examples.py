@@ -195,7 +195,7 @@ def test_sensor_bridge_declares_the_port_and_the_patch_it_arrives_in(copied,
     out, _ = capsys.readouterr()
     assert "1 patch(es), 0 authored" in out
     assert "1 serial link(s) declared" in out
-    assert "mode headless at 50 fps" in out
+    assert "mode window at 50 fps" in out
 
 
 def test_the_metronome_manifest_is_the_plans_worked_example():
@@ -250,6 +250,12 @@ def test_fm_synth_authors_its_patch_and_fills_its_table(copied, nolib, capsys):
     assert "modindex: 8 number(s) parsed" in out
     assert "is this patch's $0" in out
     assert "built fm-" in out
+
+    # no-silent: the shipped panel asks for the stream to open on load, so the
+    # voice is audible the moment a person lifts the gate (the gain the preset
+    # primes and the metronome's own test cover the loud half; the DSP request
+    # is what a run cannot leave silent by accident)
+    assert ("message", "pd", "dsp", (1.0,)) in nolib.sent
 
     # the numbers the manifest's array file holds are in the table the patch made
     written = [values for name, values in nolib.arrays.items()

@@ -240,10 +240,20 @@ def _get_prop(target, prop):
 
 
 def _set_prop(target, prop, value):
-    """Write one property, unwrapping the language value for the host side."""
+    """Write one property, unwrapping the language value for the host side.
+
+    Mirrors :func:`_get_prop`'s contract: a host object that owns a property
+    table raises ``KeyError`` on a name that is not in it - that is how it says
+    "readable, but not this one" - so the miss is caught here rather than left
+    to escape the interpreter as a raw ``KeyError``; ``SET`` then answers with
+    its own "no writable properties" line, the same voice ``GET`` uses.
+    """
     setter = getattr(target, "set_prop", None)
     if callable(setter):
-        setter(prop, value_to_python(value))
+        try:
+            setter(prop, value_to_python(value))
+        except KeyError:
+            return False
         return True
     if isinstance(target, dict):
         target[prop] = value

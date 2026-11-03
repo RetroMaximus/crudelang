@@ -24,6 +24,7 @@ import json
 
 import pytest
 
+from crude.ui.props import PLACE_MODES
 from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       PropError, State, as_role, catalog_names, define,
                       define_prop, digest, document, exists, get_kind, has,
@@ -31,12 +32,13 @@ from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       prop_names, props_of, registered_names, reset, settle,
                       settled, states, UIError, value_of)
 
-#: the nineteen kinds the plan's widget list adds up to: the twelve faces and
-#  controls, plus the seven synth widgets S9 put on the same conventions
+#: the twenty-one kinds the plan's widget list adds up to: the twelve faces and
+#  controls, plus the nine synth widgets and canvases S9 put on the same
+#  conventions
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "adsr", "curve", "xy", "keybed",
-           "preset_bar")
+           "waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
+           "keybed", "preset_bar")
 
 
 @pytest.fixture(autouse=True)
@@ -465,6 +467,86 @@ def test_a_meter_reads_a_level_and_a_number_box_takes_one_as_well():
     assert "step" not in prop_names("meter")
     assert "editable" in prop_names("number")
     assert settled("meter")["value"] == 0.0
+
+
+# -- the placement rows: a name can leave the box for every kind -----------
+
+
+def test_the_placement_modes_are_the_six_edges_a_word_can_take():
+    assert PLACE_MODES == ("inside", "top", "bottom", "left", "right", "none")
+
+
+@pytest.mark.parametrize("kind", CATALOG)
+def test_every_kind_inherits_the_placement_rows_at_the_inside_default(kind):
+    """A small control can push its name outside - and no kind opted out.
+
+    These are ``_COMMON`` rows, so they land on every kind (the faces included)
+    with the behaviour that keeps the current look: a word ``inside`` by default
+    and zero nudges, and no offset on a kind that was never given a side.
+    """
+    built = settled(kind)
+    assert built["label_place"] == "inside", kind
+    assert built["value_place"] == "inside", kind
+    for word in ("label_dx", "label_dy", "value_dx", "value_dy"):
+        assert built[word] == 0.0, (kind, word)
+    assert get_kind(kind).get("label_place").choices == PLACE_MODES
+    assert get_kind(kind).get("value_place").choices == PLACE_MODES
+
+
+@pytest.mark.parametrize("word", ("label_place", "value_place"))
+def test_a_placement_word_outside_the_edge_list_is_refused_by_name(word):
+    with pytest.raises(PropError) as raised:
+        settle("knob", word, "above")
+    assert "'above'" in str(raised.value)
+    assert "inside" in str(raised.value) and "none" in str(raised.value)
+
+
+@pytest.mark.parametrize("word,given", [("label_place", "top"),
+                                        ("value_place", "top"),
+                                        ("label_dx", 4.0),
+                                        ("label_dy", 4.0),
+                                        ("value_dx", 4.0),
+                                        ("value_dy", 4.0)])
+def test_no_placement_row_is_a_pd_box_argument(word, given):
+    """A name's position is the drawing's business, never a Pd inlet.
+
+    ``PD_EMIT`` only fires on rows that carry a ``pd_name``; the placement rows
+    must have none, so setting one never invents an argument for a vanilla box.
+    """
+    row = get_kind("slider").get(word)
+    assert row.pd_name == "", word
+    assert word not in pd_arguments("slider", settled("slider", {word: given}))
+
+
+# -- the two general canvases ---------------------------------------------
+
+
+def test_the_plot_graphs_a_value_list_against_its_own_span():
+    """A plot has no full scale, so it carries data and a window and no range."""
+    plot = get_kind("plot")
+    names = set(prop_names("plot"))
+    assert {"data", "points"} <= names, plot
+    assert plot.pd_object == "", "no vanilla [plot] box to twin to"
+    # autoscaling reads the array's own min/max, so it must not carry value rows
+    assert not names & set(("value", "min", "max", "step", "log")), plot
+    assert plot.args == ("label",)
+    assert settled("plot")["role"] == "grid"
+
+
+def test_the_logview_is_a_scrollable_text_area_the_script_appends_to():
+    view = get_kind("logview")
+    names = set(prop_names("logview"))
+    assert {"lines", "scroll"} <= names, view
+    assert view.pd_object == "", "a log view is not a Pd box"
+    assert view.args == ("label",)
+    built = settled("logview", {"lines": ["a", "b"], "scroll": 3})
+    assert built["lines"] == ["a", "b"]
+    assert built["scroll"] == 3.0, "a row count is not a pixel offset"
+    # scroll has a floor (never before the newest line) and no ceiling, because
+    # how far the tail reaches is the box's height, decided by the face
+    assert get_kind("logview").get("scroll").minimum == 0.0
+    assert get_kind("logview").get("scroll").maximum is None
+    assert settled("logview", {"scroll": -4})["scroll"] == 0.0
 
 
 # -- inheritance -------------------------------------------------------------
@@ -950,9 +1032,9 @@ def test_dumping_one_kind_and_the_whole_table_are_two_different_questions(bpm):
 
 
 def test_a_kind_and_a_prop_can_say_what_they_are_when_a_log_needs_to_say_it(bpm):
-    assert str(bpm) == ("Kind(bpm_slider, 23 props, from slider, "
+    assert str(bpm) == ("Kind(bpm_slider, 30 props, from slider, "
                         "emits [hslider], defined by script)")
-    assert str(get_kind("panel")) == "Kind(panel, 16 props, emits [cnv])"
+    assert str(get_kind("panel")) == "Kind(panel, 22 props, emits [cnv])"
     assert repr(get_kind("slider")) == "<Kind slider>"
     assert str(get_kind("slider").get("size")).startswith(
         "slider.size: string = 'md'")

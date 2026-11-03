@@ -42,11 +42,11 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
                       pd_arguments, pd_object_for, reset, root_panel)
 
 #: the kinds that own a face: every one of them draws a picture inside the plate,
-#  from the six synth displays to the ranges, the meter, the radio's cells and
-#  the dial - while ``vslider`` and ``preset_bar`` are proved below to reach a
-#  face through the chain instead of by owning one
-DISPLAY = ("waveform", "spectrum", "adsr", "curve", "xy", "keybed",
-           "slider", "meter", "radio", "knob")
+#  from the eight synth displays and canvases to the ranges, the meter, the radio's
+#  cells and the dial - while ``vslider`` and ``preset_bar`` are proved below to
+#  reach a face through the chain instead of by owning one
+DISPLAY = ("waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
+           "keybed", "slider", "meter", "radio", "knob")
 
 #: the kinds a bare plate and a word still describe: nothing here draws inside
 #  the plate, because a toggle is the plate and a panel is where the others sit
@@ -537,6 +537,129 @@ def test_a_knob_draws_its_label_and_its_readout(root, skin):
                   box=(24, 24, 96, 96))
     said = [op.get("text") for op in paint(held, skin).ops_named("text")]
     assert said == ["Index", "7"], "the word it was given, the number it holds"
+
+
+# -- placement: a name pushed outside a box too small to hold it ------------
+
+
+def _word(drawn, text):
+    return [op for op in drawn.ops_named("text") if op.get("text") == text]
+
+
+def test_a_tiny_knob_puts_its_name_above_the_box_and_still_turns(root, skin):
+    """The 25x25 case the notes complained about, in pixels.
+
+    With the name on ``top`` the dial keeps the whole box (no strip is reserved
+    inside it), and the word is drawn above the screen box - yet still inside the
+    widget's grown draw-clip, so a real scissor would not cut it. The hit rectangle
+    stays the 25x25 box, so the grown clip never reaches into a neighbour.
+    """
+    held = placed(root, skin, "knob", {"label": "Index", "min": 0, "max": 12,
+                                       "value": 7, "label_place": "top",
+                                       "value_place": "none"},
+                  box=(120, 120, 25, 25))
+    drawn = paint(held, skin)
+    sl, st, _sw, _sh = held.screen_box
+    name = _word(drawn, "Index")
+    assert len(name) == 1, "the name is drawn once, outside"
+    label = name[0]
+    assert label.get("y") < st, "the word sits above the box, not in it"
+    # the draw-clip grew upward to reach the word: its top is at/above the word
+    assert label.clip[1] <= label.get("y") + 1e-6, "not clipped away"
+    # and a full-size dial is still there: the tiny box was not given up on
+    assert drawn.count("circle") >= 1, "the dial keeps the whole box to turn in"
+    assert _word(drawn, "7") == [], "value_place=none hides the readout"
+
+
+def test_a_name_aimed_off_the_default_edge_moves_with_the_offset(root, skin):
+    """``label_dx``/``label_dy`` are the escape hatch when a bare edge is close."""
+    held = placed(root, skin, "knob", {"label": "Index", "min": 0, "max": 12,
+                                       "value": 0, "label_place": "top",
+                                       "value_place": "none"},
+                  box=(120, 120, 40, 40))
+    bare = _word(paint(held, skin), "Index")[0]
+    held.set("label_dy", -12.0)
+    held.set("label_dx", 9.0)
+    nudged = _word(paint(held, skin), "Index")[0]
+    assert nudged.get("y") == pytest.approx(bare.get("y") - 12.0), \
+        "a negative dy lifts the word further above the box"
+    assert nudged.get("x") == pytest.approx(bare.get("x") + 9.0), \
+        "dx slides it along the top edge"
+
+
+def test_an_inside_default_still_writes_the_word_in_the_box(root, skin):
+    """Nobody opted out: the word is where it always was, above the dial, inside."""
+    held = placed(root, skin, "knob", {"label": "Index", "min": 0, "max": 12,
+                                       "value": 7},
+                  box=(24, 24, 96, 96))
+    left, top, width, height = held.content_box()
+    name = _word(paint(held, skin), "Index")[0]
+    assert top <= name.get("y") < top + height, "the caption stayed inside"
+    assert name.clip == held._clip, "an inside word grows no clip"
+
+
+def test_a_meter_lets_its_name_leave_a_narrow_box_to_the_left(root, skin):
+    """The plate-and-label path agrees with the knob faces about ``left``."""
+    held = placed(root, skin, "meter", {"label": "beat", "min": 0, "max": 1,
+                                        "value": 0.5, "label_place": "left"},
+                  box=(200, 40, 24, 80))
+    drawn = paint(held, skin)
+    sl, _st, _sw, _sh = held.screen_box
+    name = _word(drawn, "beat")[0]
+    assert name.get("x") < sl, "the word is drawn to the left of the strip"
+    assert name.get("align") == "right"
+    assert name.clip[0] <= name.get("x"), "and inside the grown clip"
+
+
+# -- the canvases: a plot graphs any list, a log view scrolls text -----------
+
+
+def test_a_plot_stretches_its_own_span_over_the_plate(root, skin):
+    """A plot has no full scale: 0 is the floor, 12 the ceiling, because it says so.
+
+    The modindex array the fm_synth graphs runs 0..12, nowhere near a waveform's
+    -1..+1, so the tallest value reaches the top of the plate and the lowest the
+    bottom - the array's own min and max are the axis.
+    """
+    held = placed(root, skin, "plot", {"data": [0.0, 6.0, 12.0]})
+    left, top, width, height = held.content_box()
+    points = paint(held, skin).last("polyline").get("points")
+    assert len(points) == 3
+    assert points[0][0] == pytest.approx(left)
+    assert points[-1][0] == pytest.approx(left + width)
+    assert points[0][1] == pytest.approx(top + height), "0 is the floor"
+    assert points[-1][1] == pytest.approx(top), "the max reaches the ceiling"
+    assert points[1][1] == pytest.approx(top + height * 0.5)
+
+
+def test_a_plot_of_a_flat_series_is_a_line_and_not_a_divide_by_zero(root, skin):
+    held = placed(root, skin, "plot", {"data": [5.0, 5.0, 5.0]})
+    left, top, width, height = held.content_box()
+    points = paint(held, skin).last("polyline").get("points")
+    ys = [p[1] for p in points]
+    assert all(y == pytest.approx(ys[0]) for y in ys), "a flat run is straight"
+    assert top <= ys[0] <= top + height, "and stays inside the plate"
+
+
+def test_a_plot_with_nothing_held_draws_no_trace(root, skin):
+    held = placed(root, skin, "plot", name="graph")
+    assert paint(held, skin).count("polyline") == 0, "silence is not a graph"
+
+
+def test_a_logview_shows_the_newest_lines_and_the_wheel_older_ones(root, skin):
+    rows = [f"line {i}" for i in range(40)]
+    held = placed(root, skin, "logview", {"lines": rows},
+                  box=(10, 10, 200, 60))
+    shown = paint(held, skin).texts()
+    assert shown, "a log with rows draws rows"
+    assert shown[-1] == "line 39", "scroll 0 parks the newest line at the bottom"
+    assert all(line in rows for line in shown), "only real rows are drawn"
+    assert len(shown) <= len(rows)
+    # scrolling up from the newest pulls older lines into the window
+    held.set("scroll", 20)
+    moved = paint(held, skin).texts()
+    assert moved[-1] != "line 39", "the window left the newest behind"
+    assert moved[-1] == "line 19", "scrolling counts whole lines up from the tail"
 
 
 # -- gestures: what pressing and dragging each picture means --------------

@@ -48,13 +48,14 @@ from typing import Tuple
 
 from .base import Renderer, UIError
 from .behaviour import install_behaviour
-from .faces import face_for
-from .geometry import Point, Rect, TEXT_HEIGHT, clip_overlap, snap_box
+from .faces import SIDES, face_for, placed_text, placement
+from .geometry import (Point, Rect, TEXT_HEIGHT, clip_overlap, snap_box,
+                       text_bounds)
 from .props import State, digest, get_kind, pd_arguments, pd_object_for
 from .skin import ROLES, Skin, as_role
 
 __all__ = ["Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
-           "format_value", "root_panel", "top_at"]
+           "format_value", "DEFAULT_DECIMALS", "root_panel", "top_at"]
 
 #: the four rows only the pointer and the keyboard may write
 POINTER = ("hovered", "pressed", "focused", "selected")
@@ -104,13 +105,23 @@ def _number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def format_value(value: Any) -> str:
+#: how many digits a readout shows when the widget itself says nothing: a
+#  person wants "80.11", not "80.11214023456789", and a meter that cannot make
+#  up its mind between two frames is not showing information, only noise.
+#  ``-1`` means "every digit there is", the old unrounded behaviour.
+DEFAULT_DECIMALS = 2
+
+
+def format_value(value: Any, decimals: int = DEFAULT_DECIMALS) -> str:
     """A prop value as a person would write it in a box: ``120``, not ``120.0``.
 
     One formatter for every widget that shows what it holds, because "a number
     box shows 120 and the slider beside it shows 120.0" is the kind of defect a
     screenshot does not catch and a test does. ``None`` is nothing to show, and a
-    list is the words a radio or a dropdown holds.
+    list is the words a radio or a dropdown holds. A float is rounded to
+    ``decimals`` digits and trailing zeros go with it - ``120.00`` reads ``120``
+    and ``0.70000001`` reads ``0.7`` - because a box that shows ten places is
+    showing the binary representation, not the value.
     """
     if value is None:
         return ""
@@ -120,14 +131,18 @@ def format_value(value: Any) -> str:
         # ``:g`` would be shorter but loses the plot past six digits, and a value
         # box that reads "1.23457e+06" for 1234567.8 is a widget lying about what
         # it holds. ``repr`` of a float is Python's shortest round-trip form, so
-        # 0.25 stays "0.25", 120.0 becomes "120", and 1234567.8 stays itself.
+        # 0.25 stays "0.25", 120.0 becomes "120", and 1234567.8 stays itself -
+        # after the rounding above, which is what a readout owes the person.
         if value != value or value in (float("inf"), float("-inf")):
             return str(value)
+        digits = int(decimals)
+        if digits >= 0:
+            value = round(value, digits)
         if value.is_integer() and abs(value) < 1e16:
             return str(int(value))
         return repr(value)
     if isinstance(value, (list, tuple)):
-        return " ".join(format_value(item) for item in value)
+        return " ".join(format_value(item, decimals) for item in value)
     return str(value)
 
 
@@ -457,9 +472,16 @@ class Widget:
 
     def value_text(self) -> str:
         """The value as a person would write it in a box; ``""`` for a kind that
-        holds nothing, which is what lets a painter ask the question of anything."""
-        return (format_value(self._slot(self.kind.props["value"]).value)
-                if self.has_value else "")
+        holds nothing, which is what lets a painter ask the question of anything.
+
+        The widget's own ``decimals`` row - every value-holding kind has one -
+        says how many places to show; ``-1`` is every digit there is."""
+        if not self.has_value:
+            return ""
+        held = self.kind.props.get("decimals")
+        digits = int(self._slot(held).value) if held is not None \
+            else DEFAULT_DECIMALS
+        return format_value(self._slot(self.kind.props["value"]).value, digits)
 
     def readout(self) -> str:
         """The words a box that is drawn to be read off shows: its number, or its choice.
@@ -1039,6 +1061,61 @@ class Widget:
         found = self.style(skin).resolve(self.role)
         return found.padding + found.width
 
+    def _label_allowance(self) -> Tuple[float, float, float, float]:
+        """Extra draw-clip on each side, for a word placed outside the box.
+
+        Only the sides a placement actually names are grown, and by the measured
+        text plus the gap :func:`~crude.ui.faces.placed_text` leaves it and any
+        nudge - so a caption pushed ``top`` gets exactly the room it needs and a
+        widget whose words are all ``inside`` is left with the box it had. This
+        widens the draw clip and nothing else: ``_screen`` - the hit rectangle -
+        is untouched, so grown margin never turns a label into a click target and
+        can never reach into a neighbour's box (the final hit claim is always
+        ``_screen``, so a grown clip alone returns nothing).
+        """
+        skin = self._skin
+        if skin is None:
+            return (0.0, 0.0, 0.0, 0.0)
+        props = self.kind.props
+        found = self.style(skin).resolve(self.role, "normal")
+        font = found.font
+        gap = max(found.width, 1.0)
+        dl = dt = dr = db = 0.0
+
+        def grow(which: str, text: Any) -> None:
+            nonlocal dl, dt, dr, db
+            if not text or f"{which}_place" not in props:
+                return
+            place = self.get(f"{which}_place") or "inside"
+            if place not in SIDES:
+                return
+            dx = float(self.get(f"{which}_dx") or 0.0)
+            dy = float(self.get(f"{which}_dy") or 0.0)
+            wide, high = text_bounds(str(text), font)
+            if place in ("top", "bottom"):
+                # the word is centred on the box's horizontal middle, so one wider
+                # than the box overhangs both sides and would be scissored there;
+                # grow the cross axis to reach it too, plus any horizontal nudge
+                across = max(0.0, wide - self.width) / 2.0 + abs(dx)
+                dl = max(dl, across)
+                dr = max(dr, across)
+                if place == "top":
+                    dt = max(dt, high + gap + abs(dy))
+                else:
+                    db = max(db, high + gap + abs(dy))
+            else:  # left / right: centred vertically, so it can overhang top/bottom
+                across = max(0.0, high - self.height) / 2.0 + abs(dy)
+                dt = max(dt, across)
+                db = max(db, across)
+                if place == "left":
+                    dl = max(dl, wide + gap + abs(dx))
+                else:
+                    dr = max(dr, wide + gap + abs(dx))
+
+        grow("label", self.label)
+        grow("value", self.readout() if self.has_value else "")
+        return (dl, dt, dr, db)
+
     def _resolve(self, origin: Point, clip: Optional[Rect],
                  skin: Optional[Skin] = None, dpr: float = None) -> None:
         """The maths :meth:`sync` did with a skin, kept for a box that just moved.
@@ -1072,6 +1149,14 @@ class Widget:
         self._screen = snap_box(box, self._grid) if self._grid else box
         self._clip = (clip_overlap(clip, self._screen) if clip is not None
                       else self._screen)
+        # grow only the draw clip on the sides a word is placed outside, so the
+        # caption survives past the box; _screen is untouched, so a hit still
+        # has to land on the widget and a grown clip cannot steal a neighbour's
+        grown = self._label_allowance()
+        if any(grown):
+            cl, ct, cw, ch = self._clip
+            dl, dt, dr, db = grown
+            self._clip = (cl - dl, ct - dt, cw + dl + dr, ch + dt + db)
         place = self._kid_place()
         for kid in self._children:
             kid._resolve(place[0], place[1], self._skin, self._grid)
@@ -1245,11 +1330,26 @@ class Widget:
         # a box that is drawn to be read off shows what it holds; every other face
         # shows the words it was given, which is the whole of the question the
         # skin's ``shows`` answers and the reason no kind is named here
+        which = "value" if ROLES[found.role].shows == "value" else "label"
         text = (self.readout() if ROLES[found.role].shows == "value"
                 else self.label)
         size = found.font
         if width <= 0 or height <= 0 or (not mark and not text):
             return 0
+        # a word pushed to a side leaves the box to its mark and is drawn outside
+        # by the shared helper - the plate-and-label path agrees with the knob and
+        # slider faces about what ``label_place='left'`` means, off one function
+        place, dx, dy = placement(self, which)
+        if text and place in SIDES:
+            placed_text(self, renderer, found, text, place, dx, dy, size=size)
+            if mark:
+                side = min(width, height)
+                renderer.glyph(left + (width - side) * 0.5,
+                               top + (height - side) * 0.5, side, side, mark,
+                               found.ink)
+            return renderer.op_count - before
+        if place == "none":
+            text = ""
         middle = top + max(0.0, (height - size * TEXT_HEIGHT) * 0.5)
         if mark and not text:
             side = min(width, height)

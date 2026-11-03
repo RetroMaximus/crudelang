@@ -211,10 +211,34 @@ def test_get_on_an_unknown_property_says_so_in_the_languages_voice(run_serial, s
     assert "no property 'nope'" in error.as_string()
 
 
-def test_a_link_handle_is_read_only(run_serial, serial_failure):
-    """S10 froze the link as GET-only; a ``SET`` would desync codec and device."""
-    run_serial('VAR port = SERIAL_OPEN("board", "loop://board")')
-    error = serial_failure('SET(port, "baud", 9600)')
+def test_set_can_move_baud_and_the_link_reopens_at_the_new_rate(run_serial, serial_runtime,
+                                                                  serial_failure):
+    """``SET(port, "baud", n)`` closes and reopens the device at the new rate.
+
+    A link is single-baud, so the File menu's Serial dialog configures each
+    declared link this way rather than restating the whole ``SERIAL_OPEN``.
+    """
+    _, error = run_serial(
+        'VAR port = SERIAL_OPEN("board", "loop://board", 115200)'
+    )
+    assert error is None, error.as_string() if error else ""
+    link = serial_runtime.link("board")
+    before = link.port
+
+    _, error = run_serial('SET(port, "baud", 9600)')
+    assert error is None, error.as_string() if error else ""
+
+    assert link.baud == 9600
+    assert link.opened is True, "the link comes back up on the new rate"
+    assert link.port is not before, "a fresh port object, not the old one re-labelled"
+    after = link.port
+
+    _, error = run_serial('SET(port, "codec", "int")')
+    assert error is None, error.as_string() if error else ""
+    assert link.codec_name == "int"
+    assert link.port is after, "a codec change leaves the device alone"
+
+    error = serial_failure('SET(port, "frames", 1)')
     assert "no writable properties" in error.as_string()
 
 

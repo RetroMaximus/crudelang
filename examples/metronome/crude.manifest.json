@@ -26,6 +26,9 @@
     "search_paths": ["pd"],
     "build_dir": ".crude_build/pd"
   },
+  "resources": {
+    "sounds": ["assets/metrotick.wav"]
+  },
   "loading": {
     "progress": "auto"
   }

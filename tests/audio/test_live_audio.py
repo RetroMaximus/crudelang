@@ -126,6 +126,72 @@ def test_the_default_configuration_is_a_real_stream_too(real_sounddevice):
         backend.close()
 
 
+def test_a_settings_page_hands_the_device_only_what_it_can_hold(real_sounddevice):
+    """The crash only a real library catches: a word where a double belongs.
+
+    The stubs used to record any ``latency`` they were handed, so a page that
+    answered the callback switch with the string ``"callback"`` reached ctypes
+    and came back as ``must be a real number, not str`` - which is how a first
+    run of the metronome example got a window, a slider and no sound.
+    """
+    for delay_ms in (0.0, 25.0):
+        config = AudioConfig(sample_rate=44100, block_size=64, in_channels=0,
+                             out_channels=2, delay_ms=delay_ms)
+        latency = config.latency
+        assert latency is None or isinstance(latency, float), latency
+        backend = open_backend(config=config, render=_silence,
+                               preferred="sounddevice", strict=True)
+        try:
+            assert backend.opened is True, backend.notes
+            assert backend.blocks == 0
+        finally:
+            backend.close()
+
+
+def test_the_other_half_of_the_callback_switch_runs_on_a_real_card(
+        real_sounddevice):
+    """Unchecking "use callbacks if possible" is a stream with nothing in it.
+
+    PortAudio is then only moved by ``read``/``write``, which is what Pure Data's
+    ``-nocallback`` mode means and what this backend's own thread does - so the
+    proof is that blocks arrive on a thread the device never calls back into,
+    and that ``stop()`` leaves no thread parked on a closed stream.
+    """
+    enough = threading.Event()
+    seen = []
+
+    def render(ticks, in_buffer, out_buffer):
+        seen.append(ticks)
+        _silence(ticks, in_buffer, out_buffer)
+        if len(seen) >= 8:
+            enough.set()
+
+    config = AudioConfig(sample_rate=48000, block_size=64, in_channels=0,
+                         out_channels=2, callbacks=False)
+    assert config.latency is None, "no delay, so nothing handed to ctypes"
+    backend = open_backend(config=config, render=render,
+                           preferred="sounddevice", strict=True)
+    try:
+        assert backend.polled is True
+        assert type(backend._stream).__name__ == "RawOutputStream"
+        backend.start()
+        thread = backend._pump_thread
+        assert thread is not None and thread.is_alive(), "nothing is pulling the stream"
+        assert enough.wait(TIMEOUT), "the polling thread never rendered a block"
+        assert backend.blocks >= 8
+        assert backend.xruns == 0, f"xruns: {backend.status_flags}"
+    finally:
+        backend.stop()
+    assert backend._pump_thread is None, "the shutdown left a thread on the device"
+    backend.close()
+
+
+def _silence(ticks, in_buffer, out_buffer) -> None:
+    """Render nothing: a hardware test must not put a tone through the speakers."""
+    for index in range(len(out_buffer)):
+        out_buffer[index] = 0.0
+
+
 class QuietSession:
     """The two halves of a Pd session the audio layer is allowed to see.
 

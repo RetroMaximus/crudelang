@@ -152,7 +152,11 @@ class ResourceView:
         if prop == "name":
             return resource.name
         if prop == "path":
-            return resource.path
+            # Pd's own file objects ([readsf~], [soundfiler~]) reject a Windows
+            # backslash path with "Invalid argument", so the path a script hands
+            # them is forward-slashed - Python and os.path accept it just the
+            # same, so this is the safe direction to normalise.
+            return str(resource.path).replace("\\", "/")
         if prop == "declared":
             return resource.declared
         if prop == "exists":

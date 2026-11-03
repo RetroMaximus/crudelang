@@ -43,6 +43,7 @@ The registry tags every binding with one of these `area=` values:
 | `pd.author` | patch authoring            | `bindings/pd_author.py` |
 | `pd.midi`   | the MIDI send shorthands  | inside `bindings/pd.py` |
 | `audio`     | the sample stream          | `bindings/audio.py`   |
+| `midi`      | the MIDI ports             | `bindings/midi.py`    |
 | `project`   | resources, presets, mode  | `bindings/project.py` |
 | `ui`        | widgets, layout, style    | `bindings/ui.py`      |
 | `serial`    | links and their callbacks | `bindings/serial.py`  |
@@ -103,24 +104,24 @@ pause.
 Receivers, sends, arrays, and lifecycle:
 
 ```
-PD_FILE(id, path)                 PD_LOAD(patch_or_file)     PD_CLOSE(patch)
-PD_EXISTS(name)                   PD_DOLLARZERO(patch)
-PD_SEND(patch, receiver, value)   PD_SEND_BANG(patch, receiver)
-PD_SEND_LIST(patch, receiver, list)   PD_SEND_MSG(...)
+PD_FILE(id, path)                           PD_LOAD(patch_or_file)          PD_CLOSE(patch)
+PD_EXISTS(name)                             PD_DOLLARZERO(patch)
+PD_SEND(patch, receiver, value)             PD_SEND_BANG(patch, receiver)
+PD_SEND_LIST(patch, receiver, list)         PD_SEND_MSG(...)
 PD_ARRAY_READ(patch, name, start, count)
-PD_ARRAY_WRITE(patch, name, values)   PD_ARRAY_SIZE(patch, name)
-PD_DSP(on_off)                    PD_SEED(patch, name, values)
-PD_SAVE(patch, path)              PD_DUMP(patch)             PD_INSPECT(patch)
-PD_UNLINK(...)                    PD_BOXES(patch)            PD_KINDS()
+PD_ARRAY_WRITE(patch, name, values)         PD_ARRAY_SIZE(patch, name)
+PD_DSP(on_off)                              PD_SEED(patch, name, values)
+PD_SAVE(patch, path)                        PD_DUMP(patch)                  PD_INSPECT(patch)
+PD_UNLINK(...)                              PD_BOXES(patch)                 PD_KINDS()
 ```
 
 Authoring (what `fm_synth` and `metronome` do):
 
 ```
-PD_BUILD(id, width, height)       PD_OBJ(patch, class_and_args, x, y)
-PD_MSG(patch, text, x, y)         PD_NUM(patch, name, x, y)
-PD_TEXT(patch, text, x, y)        PD_TABLE(patch, name, size, x, y)
-PD_SYMB(patch, name, x, y)        PD_LINK(patch, from, to, [outlet], [inlet])
+PD_BUILD(id, width, height)                 PD_OBJ(patch, class_and_args, x, y)
+PD_MSG(patch, text, x, y)                   PD_NUM(patch, name, x, y)
+PD_TEXT(patch, text, x, y)                  PD_TABLE(patch, name, size, x, y)
+PD_SYMB(patch, name, x, y)                  PD_LINK(patch, from, to, [outlet], [inlet])
 PD_EMIT(patch, widget, [x, y, w, h])
 PD_GUI(patch, kind, x, y, [w, h, props])   PD_GUI_KINDS()
 ```
@@ -156,14 +157,47 @@ does that on the loop's frame.
 
 ```
 AUDIO_INFO()                       AUDIO_DEVICES([direction])
+AUDIO_USE_DEVICES([input], [output])   AUDIO_DEVICE()
 AUDIO_START([backend])             AUDIO_STOP()
 AUDIO_LEVEL([channel, mode])       AUDIO_WAVEFORM([frames, channel])
 ```
 
 `AUDIO_LEVEL`'s `mode` is `"rms"` (default) or `"peak"`; `AUDIO_WAVEFORM`
 returns a list of numbers copied out of the last `frames` blocks. Both
-answers come from taps the runtime holds, so a headless run over the
-:class:`NullBackend` still has a waveform to read.
+answers come from taps the runtime holds, so a run on the
+:class:`NullBackend` - pulled, no device thread, nothing audible - still has
+a waveform to read.
+
+`AUDIO_DEVICES([direction])` lists the machine's inputs (`"input"`), outputs
+(`"output"`) or both, one `"index: name"` line each. `AUDIO_USE_DEVICES(input,
+output)` takes two of those indices and reopens the live stream on them - stop,
+close, open a fresh backend, re-attach the running session, and start again if
+it was running - so the File menu's Audio dialog can change devices without a
+restart. Omitted arguments keep the current device. `AUDIO_DEVICE()` reads back
+the `"input"`/`"output"` indices now in use.
+
+## MIDI
+
+Real ports, not the `libpd` send shorthands (those are `PD_MIDI_*`, under Pd
+above). Everything here reaches :class:`crude.midi.runtime.MidiRuntime`, whose
+backend is `python-rtmidi` when it imports and a null one otherwise, so a
+machine with no MIDI library simply lists no devices rather than failing.
+
+```
+MIDI_DEVICES([direction])          MIDI_OPEN(direction, index)
+MIDI_SEND(port, data)              MIDI_CLOSE(port)
+ON_MIDI(port, fn)                  OFF_MIDI(port, [fn])
+```
+
+`MIDI_DEVICES([direction])` answers `"index: name"` lines for `"input"`,
+`"output"`, or both when no direction is given. `MIDI_OPEN(direction, index)`
+opens one of those ports and returns a handle a port index and direction are
+fixed to (the handle is readable, not writable). `MIDI_SEND(port, data)` writes
+one packet - a list of MIDI bytes - to an open output. `ON_MIDI(port, fn)`
+calls `fn` with each inbound message, handed over on the frame's dispatch from
+the backend's reader thread; it shares the serial runtime's three-strike mute
+budget, so a handler that keeps raising mutes itself rather than flooding the
+loop. `OFF_MIDI(port, [fn])` drops the handlers, all of them or just `fn`.
 
 ## UI / widgets
 
@@ -180,7 +214,8 @@ TEXT(label)   BUTTON(label)   TOGGLE(label)   ICON(name)
 SLIDER(label, lo, hi, value)   VSLIDER(...)   NUMBER(label, lo, hi, value)
 METER(label, lo, hi, value)    RADIO(values)   DROPDOWN(values)
 PANEL(title)   XY_PAD(label, x, y)   KEYBED(label, low, octaves)   ADSR(...)   CURVE(...)
-SPECTRUM       WAVEFORM         PRESET_BAR(...)   PANEL(...)
+SPECTRUM       WAVEFORM         PLOT(label)         LOGVIEW(label)
+PRESET_BAR(...)   PANEL(...)
 ```
 
 Placement and layout:
@@ -243,6 +278,41 @@ Every `P_*` call appends to the widget's `PaintList`, which is drawn
 during the frame's `draw` step; the cache is invalidated by a `SET` on the
 widget or by `PAINT_REQUEST(widget)`.
 
+## Menus
+
+A running window's only menu is one built from the catalog it already has -
+`PANEL`s and `BUTTON`s and the `visible` prop - not a native bar (see
+`widgets.md`). These names are in the `ui` area; the bar and its popups are
+ordinary widgets, so a menu is a composition the tests can drive with no GPU.
+
+```
+MENUBAR([name])                    MENU(bar, title)
+MENU_ADD(menu, label, fn)          MENU_CHECK(menu, label, [on], fn)
+MENU_SHOW(menu)                    MENU_HIDE(menu)
+MENU_AUDIO_DIALOG(menu[, title])   MENU_MIDI_DIALOG(menu[, title])
+MENU_SERIAL_DIALOG(menu, link[, title])
+```
+
+`MENUBAR([name])` puts a strip along the top of the window and returns the bar;
+`MENU(bar, title)` adds one title and its hidden popup. `MENU_ADD` appends a
+plain row that hides the popup and runs `fn`; `MENU_CHECK` appends a tickable
+row (a `TOGGLE`) whose `fn` is told the state the click just set, with `on`
+the initial tick. Opening one popup closes whichever was open, and a closed
+popup paints nothing, so the bar costs only its titles until it is clicked.
+
+Three of the rows are ready-made configuration dialogs, so picking the item
+opens a small panel of controls with one `Apply` button rather than running a
+bare callback. `MENU_AUDIO_DIALOG(menu[, title])` lists the audio runtime's
+input and output ports as two `DROPDOWN`s and, on Apply, switches the running
+stream onto the picked device indices - exactly what `AUDIO_USE_DEVICES` does.
+`MENU_MIDI_DIALOG(menu[, title])` lists the MIDI ports per direction and opens
+the pick with `MIDI_OPEN`. `MENU_SERIAL_DIALOG(menu, link[, title])` shows one
+`NUMBER` seeded at a link's current rate and applies `SET(link, "baud", n)`.
+The ports are read only when a panel opens, never when the menu is built, so a
+project with no sound card, no MIDI library and no serial cable still builds its
+menu and runs headless; with no runtime the dropdown shows one disabled
+`(no devices)` row and applying does nothing.
+
 ## Common handle calls
 
 The two every widget answer through, from `bindings/core.py`:
@@ -269,7 +339,10 @@ OFF_SERIAL(link, [fn])
 ```
 
 The link handle answers to `GET`/`SET` for `"open"`, `"port"`, `"baud"`,
-`"codec"` and `"id"`. A `loop://` port is always registered, so
+`"codec"` and `"id"`. `SET(link, "baud", n)` is writable: a link is
+single-baud, so it closes the device and reopens it at the new rate - which is
+how the File menu's Serial dialog sets an RX or TX link's speed, one link per
+rate. A `loop://` port is always registered, so
 `SERIAL_OPEN("x", "loop://x")` never needs a real device, which is how the
 S10 tests run and how the CI matrix runs `sensor_bridge`.
 

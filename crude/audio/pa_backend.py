@@ -114,6 +114,16 @@ class PyAudioBackend(AudioBackend):
         pa = module()
         config = self.config
 
+        if not config.callbacks:
+            # PyAudio can be polled, but this adapter only knows how to render
+            # inside a callback - so the dialog's switch is said to be unfollowed
+            # here rather than left in the settings line as a promise nobody kept
+            self.notes.append(
+                "pyaudio renders in a callback: the 'no callbacks' setting is "
+                "only followed by the sounddevice backend"
+            )
+            self.log(self.notes[-1])
+
         if config.in_channels and config.out_channels and \
                 config.in_channels != config.out_channels:
             raise AudioUnavailable(

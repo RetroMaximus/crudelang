@@ -334,7 +334,7 @@ def test_a_panel_is_a_panel_kind_and_a_panel_kind_is_a_container():
     held = Panel()
     assert held.kind.name == CONTAINER_KIND
     assert held.is_container is True
-    assert str(held.kind) == "Kind(panel, 16 props, emits [cnv])"
+    assert str(held.kind) == "Kind(panel, 22 props, emits [cnv])"
     # a Panel built on a script kind is still a panel, and the kind is its own
     define("card", CONTAINER_KIND)
     assert Panel(kind="card").kind.name == "card"

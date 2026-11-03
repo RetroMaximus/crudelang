@@ -53,13 +53,16 @@ PROGRESS_MODES = ("auto", "console", "json", "splash", "none")
 #: Where a manifest may say an audio backend comes from (see :func:`known_backends`).
 AUDIO_BACKENDS = ("sounddevice", "pyaudio", "null")
 
+#: Where a manifest may say a MIDI backend comes from (see :func:`known_midi_backends`).
+MIDI_BACKENDS = ("rtmidi", "null")
+
 #: A project id also names its build cache, so it has to be filesystem-safe.
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 #: Keys a whole manifest may contain; anything else is a validation error.
 TOP_LEVEL_KEYS = (
     "$schema", "id", "name", "entry",
-    "runtime", "ui", "audio", "pd", "serial", "resources", "loading",
+    "runtime", "ui", "audio", "pd", "serial", "midi", "resources", "loading",
 )
 
 
@@ -252,6 +255,38 @@ class SerialDecl:
 
 
 @dataclass(frozen=True)
+class MidiSection:
+    """``midi``: whether this project wants MIDI at all, and how much it matters.
+
+    A project that says nothing here never opens a port - the loader only
+    builds a MIDI runtime for a manifest that declares the section - so this
+    stays deliberately optional, and absent means "no MIDI" rather than an
+    error naming a missing key.
+    """
+
+    backend: Optional[str] = None
+    #: ``optional: true`` (the default) means "nice to have": no
+    #: ``python-rtmidi`` here is a note, not a failure, and the project still
+    #: loads with no port open.
+    optional: bool = True
+    #: ``false`` opens no ports at all: the runtime still exists, so a script's
+    #: ``MIDI_DEVICES()`` answers with an empty list instead of an error.
+    #: Absent the whole ``midi`` key, this is what it stays: False, so a project
+    #: that never declared MIDI never builds a runtime for it at all - which is
+    #: the difference between "not asked for" and "asked for, and turned off".
+    enabled: bool = False
+
+    @property
+    def strict(self) -> bool:
+        """Does a failure to open the named backend end the load?"""
+        return self.enabled and not self.optional
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"backend": self.backend, "optional": self.optional,
+                "enabled": self.enabled}
+
+
+@dataclass(frozen=True)
 class ArrayDecl:
     """One ``resources.arrays`` entry: a file of numbers to seed a Pd array.
 
@@ -318,6 +353,7 @@ class Manifest:
     audio: AudioSection = field(default_factory=AudioSection)
     pd: PdSection = field(default_factory=PdSection)
     serial: Tuple[SerialDecl, ...] = ()
+    midi: MidiSection = field(default_factory=MidiSection)
     resources: Resources = field(default_factory=Resources)
     loading: LoadingConfig = field(default_factory=LoadingConfig)
 
@@ -367,6 +403,7 @@ class Manifest:
             "audio": self.audio.as_dict(),
             "pd": self.pd.as_dict(),
             "serial": [link.as_dict() for link in self.serial],
+            "midi": self.midi.as_dict(),
             "resources": self.resources.as_dict(),
             "loading": self.loading.as_dict(),
         }
@@ -491,6 +528,7 @@ def build_manifest(data: Any, root: str = "", source: str = "") -> Manifest:
         audio=_audio(data.get("audio"), "audio"),
         pd=pd_section,
         serial=_serial(data.get("serial"), "serial"),
+        midi=_midi(data.get("midi"), "midi"),
         resources=_resources(data.get("resources"), "resources",
                              tuple(patch.id for patch in pd_section.patches)),
         loading=_loading(data.get("loading"), "loading"),
@@ -675,6 +713,31 @@ def _serial_decl(data: Any, pointer: str) -> SerialDecl:
     )
 
 
+def _midi(data: Any, pointer: str) -> MidiSection:
+    if data is None:
+        return MidiSection()
+    data = _mapping(data, pointer, "midi")
+    _no_extra(data, ("backend", "optional", "enabled"), pointer)
+
+    backend = data.get("backend")
+    if backend is not None:
+        backend = _text(backend, None, f"{pointer}.backend", "backend")
+        known = known_midi_backends()
+        if known and backend not in known:
+            raise ManifestError(
+                f"there is no MIDI backend named '{backend}' "
+                f"(known: {', '.join(known)})",
+                f"{pointer}.backend",
+            )
+
+    return MidiSection(
+        backend=backend,
+        optional=_flag(data.get("optional"), True, f"{pointer}.optional",
+                       "optional"),
+        enabled=_flag(data.get("enabled"), True, f"{pointer}.enabled", "enabled"),
+    )
+
+
 def _resources(data: Any, pointer: str,
                patch_ids: Sequence[str] = ()) -> Resources:
     if data is None:
@@ -753,6 +816,23 @@ def known_backends() -> Tuple[str, ...]:
         return tuple(backend_names())
     except Exception:  # pragma: no cover - a broken registry is not the manifest's fault
         return AUDIO_BACKENDS
+
+
+def known_midi_backends() -> Tuple[str, ...]:
+    """The MIDI names a manifest may use, when the MIDI package can say.
+
+    ``python-rtmidi`` is an optional dependency (see ``docs/build.md``), so this
+    asks the registry what is actually registered rather than trusting the
+    statically known list whenever the package can be imported at all.
+    """
+    try:
+        from ..midi import backend_names
+    except Exception:  # pragma: no cover - midi is a hard dependency of itself
+        return MIDI_BACKENDS
+    try:
+        return tuple(backend_names())
+    except Exception:  # pragma: no cover - a broken registry is not the manifest's fault
+        return MIDI_BACKENDS
 
 
 # --------------------------------------------------------------------------

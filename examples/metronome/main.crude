@@ -2,27 +2,63 @@
 # script owns the blink, and a slider and a number box edit one value.
 #
 # This is the plan's worked example, and the shape every windowed project
-# follows: author a patch, declare widgets, place them, wire them. The patch
-# half (PD_BUILD .. PD_LOAD, PD_SEND, ON_PD) is live now; the widget kinds
-# (TEXT METER SLIDER NUMBER TOGGLE, PLACE, LINK_VALUE, ON_CHANGE, ON_FRAME)
-# arrive with the window stages, and the plan's acceptance test for this
-# example is written against a renderer that records draws instead of one that
-# needs a GPU.
-#
-# Until then this file still loads: in terminal or headless mode the same
-# widget tree exists behind a renderer that draws nothing, so the script below
-# needs no mode branch - the LED blinks invisibly.
+# follows: author a patch, declare widgets, place them, wire them. The click is
+# now a real sound: a [readsf~] reads the shipped metrotick.wav, and a
+# synthesised 1000 Hz beep is kept as the alternative the source toggle picks
+# between. Both feed one master gain before the DAC, and the DSP toggle opens or
+# closes the audio stream - so nothing about this panel is silent by accident.
 #
 # Run it:  python -m crude run examples/metronome
+#          Press the Run toggle to start the beat: [metro] holds a 1 only while
+#          it runs, so the panel is silent - honestly silent, not broken -
+#          until someone asks for the tick.
 
 VAR p      = PD_BUILD("metro", 360, 220)
-VAR r_bpm  = PD_OBJ(p, "r bpm",     30, 40)
-VAR metro  = PD_OBJ(p, "metro 500", 30, 80)
-VAR s_tick = PD_OBJ(p, "s tick",    30, 120)
-VAR r_run  = PD_OBJ(p, "r run",     30, 160)
-PD_LINK(p, r_bpm, metro, 0, 1)         # BPM -> period inlet
+VAR r_bpm  = PD_OBJ(p, "r bpm",     20, 40)
+# [metro] waits on a PERIOD in milliseconds, but the slider reads beats per
+# minute - so the number is converted in the patch. Without this box the slider
+# ran backwards: 80 sent as a period ticked faster than 120.
+VAR conv   = PD_OBJ(p, "expr 60000 / $f1", 20, 60)
+VAR metro  = PD_OBJ(p, "metro 500", 20, 80)
+VAR s_tick = PD_OBJ(p, "s tick",    20, 120)
+VAR r_run  = PD_OBJ(p, "r run",     20, 160)
+# A tonal beep on every tick: the script fires an envelope into [line~] on each
+# "beep", and it gates a short 1000 Hz burst.
+VAR r_beep = PD_OBJ(p, "r beep",     130, 40)
+VAR env    = PD_OBJ(p, "line~",      130, 70)
+VAR osc    = PD_OBJ(p, "osc~ 1000",  130, 100)
+VAR amp    = PD_OBJ(p, "*~",         130, 130)
+# The real tick: [readsf~] reads metrotick.wav. [readsf~] has one message inlet
+# (index 0) that takes both the "open <path>" message and the 0/1 start/stop, so
+# [r tickfile] and [r tickwav] both land there - the higher-numbered inlets are
+# the audio crossfade gains, and a control connection to them is rejected.
+VAR r_tickfile = PD_OBJ(p, "r tickfile",   250, 40)
+VAR r_tickwav  = PD_OBJ(p, "r tickwav",    250, 70)
+VAR readsf     = PD_OBJ(p, "readsf~", 250, 100)
+# One master gain sums both click paths before the DAC. The script sends the
+# slider's value to [r gain]; [sig~] turns that control-rate number into a signal
+# to multiply the summed click by.
+VAR r_gain   = PD_OBJ(p, "r gain",  20, 220)
+VAR sigs     = PD_OBJ(p, "sig~",    20, 250)
+VAR mix      = PD_OBJ(p, "+~",      130, 200)
+VAR gainamp  = PD_OBJ(p, "*~",      130, 230)
+VAR out      = PD_OBJ(p, "dac~",    250, 230)
+PD_LINK(p, r_bpm, conv)                # BPM -> the period inlet's ms
+PD_LINK(p, conv, metro, 0, 1)          # 60000 / bpm -> [metro]
 PD_LINK(p, metro, s_tick)
 PD_LINK(p, r_run, metro)               # start / stop
+PD_LINK(p, r_beep, env)                # the script's envelope opens the beep
+PD_LINK(p, osc, amp)
+PD_LINK(p, env, amp, 0, 1)
+PD_LINK(p, r_tickfile, readsf, 0, 0)   # "open <path>" -> the message inlet
+PD_LINK(p, r_tickwav, readsf, 0, 0)    # 0 / 1 -> the same message inlet
+PD_LINK(p, amp, mix)                   # beep -> the summed click
+PD_LINK(p, readsf, mix)                # wav  -> the summed click
+PD_LINK(p, r_gain, sigs)
+PD_LINK(p, sigs, gainamp, 0, 1)        # gain -> the multiplier's control inlet
+PD_LINK(p, mix, gainamp, 0, 0)         # summed click -> the multiplier
+PD_LINK(p, gainamp, out, 0, 0)
+PD_LINK(p, gainamp, out, 0, 1)
 PD_LOAD(p)
 
 VAR title = TEXT("METRONOME")
@@ -30,31 +66,88 @@ VAR led   = METER("beat", 0, 1, 0)
 VAR bpm   = SLIDER("BPM", 20, 300, 120)
 VAR field = NUMBER("BPM", 20, 300, 120)
 VAR run   = TOGGLE("Run")
+VAR src   = TOGGLE("Use wav tick", 1)
+VAR gain  = SLIDER("Tick volume", 0, 1, 0.7)
+VAR dsp   = TOGGLE("Audio", 1)
+VAR scope = WAVEFORM("click")
 SET(run, "glyph_off", "play")
 SET(run, "glyph_on", "pause")
+# the 24x24 LED has no room for its name inside, so put it under the box
+SET(led, "label_place", "bottom")
 
-PLACE(title,  16, 12, 200, 20)
-PLACE(led,    16, 40,  24, 24)
-PLACE(bpm,    56, 40, 200, 24)
-PLACE(field, 264, 40,  80, 24)
-PLACE(run,    16, 84,  96, 28)
+PLACE(title,  16, 40, 200, 20)
+PLACE(led,    16, 68,  24, 24)
+PLACE(bpm,    56, 68, 200, 24)
+PLACE(field, 264, 68,  80, 24)
+PLACE(run,    16, 112,  72, 24)
+PLACE(src,    92, 112, 118, 24)
+PLACE(gain,  214, 112,  74, 24)
+PLACE(dsp,   292, 112,  52, 24)
+PLACE(scope,  16, 144, 328, 68)
 
 LINK_VALUE(bpm, field)                          # two-way, loop-guarded
 ON_CHANGE(bpm, FUNC(v) -> PD_SEND(p, "bpm", v))
 ON_CHANGE(run, FUNC(v) -> PD_SEND(p, "run", v))
 ON_CHANGE(run, FUNC(v) -> SET(led, "value", 0))
+ON_CHANGE(gain, FUNC(v) -> PD_SEND(p, "gain", v))
+ON_CHANGE(dsp, FUNC(v) -> PD_DSP(v))
 
-# Pd's [metro] bangs "tick" on every beat; the handler only sets the LED, so
-# nothing here waits on a timer and the frame loop stays the only clock.
-ON_PD(p, "tick", FUNC() -> SET(led, "value", 1))
+# [readsf~] forgets its open once the file reaches EOF - a later "1" reports
+# "start requested with no prior 'open'" and says nothing - so each beat re-sends
+# the open message before starting. This is a MESSAGE ("open <file>"), not a
+# list: [readsf~] has no list method, so PD_SEND_LIST would leave it silent.
+PD_SEND_MSG(p, "tickfile", "open", [GET(RES("metrotick"), "path")])
+# the slider's default is not sent by a move, so prime the gain the way a person
+# leaving it at 0.7 would hear it (no-silent: the click is audible on load)
+PD_SEND(p, "gain", 0.7)
+
+# Pd's [metro] bangs "tick" on every beat; the handler lights the LED and fires
+# the click in one go, so nothing waits on a timer and the frame loop stays the
+# only clock. The source toggle picks the path: when the wav is on, the open is
+# re-sent and the file restarted (stop then start), because [readsf~] forgets the
+# open at EOF; otherwise the beep's envelope is fired as a list to [line~] -
+# attack-then-release in seconds.
+FUNC on_tick()
+    SET(led, "value", 1)
+    IF GET(src, "value") > 0 THEN
+        PD_SEND_MSG(p, "tickfile", "open", [GET(RES("metrotick"), "path")])
+        PD_SEND(p, "tickwav", 0)
+        PD_SEND(p, "tickwav", 1)
+    ELSE
+        PD_SEND_LIST(p, "beep", [1, 0.001, 0, 0.06])
+    END
+END
+ON_PD(p, "tick", on_tick)
 
 FUNC on_frame(dt)
     VAR v = GET(led, "value") - dt * 6.0
     IF v < 0 THEN VAR v = 0
     SET(led, "value", v)
+    SET(scope, "data", AUDIO_WAVEFORM(256))
 END
 ON_FRAME(on_frame)
 
-# The click itself is Pd's: [metro] -> [s tick] reaches the sample rate as long
-# as the stream is running, which a script asks for once the patches exist.
+# The runtime menu: a bar of ordinary widgets, built by the reusable MENU_*
+# framework (see docs/widgets.md). Picking an item hides its popup and runs the
+# callback - nothing here needs a native menu, and nothing is queried until a
+# person clicks, so the bar costs a handful of widgets and no device call.
+VAR bar        = MENUBAR("menu")
+VAR file_menu  = MENU(bar, "File")
+VAR audio_menu = MENU(bar, "Audio")
+VAR midi_menu  = MENU(bar, "MIDI")
+VAR serial_menu = MENU(bar, "Serial")
+
+MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("metronome", GET(bpm, "value")))
+MENU_ADD(file_menu, "Load preset", FUNC() -> SET(bpm, "value", PRESET_LOAD("metronome")))
+MENU_ADD(audio_menu, "Unmute", FUNC() -> PD_DSP(1))
+MENU_ADD(audio_menu, "Mute", FUNC() -> PD_DSP(0))
+MENU_AUDIO_DIALOG(audio_menu)
+MENU_MIDI_DIALOG(midi_menu)
+MENU_ADD(serial_menu, "No serial link", FUNC() -> LOG("metronome declares no serial port"))
+
+# The click itself is Pd's: [metro] -> [s tick] reaches the script as an event,
+# and the DAC hears it for as long as the stream runs, which a script asks for
+# once the patches exist. The DSP toggle defaults on and the gain is primed, so
+# the moment Run is pressed the tick is audible - nothing is voiced, and nothing
+# is faked, before that press.
 PD_DSP(1)

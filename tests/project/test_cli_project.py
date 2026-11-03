@@ -301,7 +301,7 @@ def test_run_takes_the_project_through_every_phase_and_back_out(deck, nolib,
     assert main(["run", deck()]) == EXIT_OK
 
     out, _ = lines(capsys)
-    assert "loaded 14 of 14 steps (100%)" in out
+    assert "loaded 15 of 15 steps (100%)" in out
     assert "[100%] runtime.activate" in out
     assert "the deck is up" in out
 
@@ -425,7 +425,7 @@ def test_splash_progress_comes_out_of_the_terminal_with_a_word(deck, nolib,
 
     out, err = lines(capsys)
     assert "there is no display to open a window on" in err
-    assert "loaded 14 of 14 steps" in out
+    assert "loaded 15 of 15 steps" in out
 
 
 def test_json_progress_turns_what_the_script_said_into_events(deck, nolib,

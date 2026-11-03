@@ -52,7 +52,7 @@ from crude.project import (
 )
 
 #: the percentage each phase reaches when it finishes, in order
-AFTER = [2, 4, 12, 20, 25, 33, 45, 55, 59, 77, 90, 94, 97, 100]
+AFTER = [2, 4, 12, 20, 25, 33, 45, 55, 59, 77, 90, 92, 94, 97, 100]
 
 
 # --------------------------------------------------------------------------
@@ -134,13 +134,13 @@ def run_all(tracker, *, details=False):
 # --------------------------------------------------------------------------
 
 
-def test_the_pipeline_has_the_fourteen_phases_in_the_order_promised():
+def test_the_pipeline_has_the_fifteen_phases_in_the_order_promised():
     assert PHASE_NAMES == (
         "manifest", "environment", "resources.validate", "audio.device",
         "pd.core", "pd.build", "pd.patches", "pd.arrays", "presets", "images",
-        "sounds", "serial", "script.compile", "runtime.activate",
+        "sounds", "serial", "midi", "script.compile", "runtime.activate",
     )
-    assert len(PHASES) == 14
+    assert len(PHASES) == 15
 
 
 def test_the_weights_add_up_to_exactly_one_hundred_percent():
@@ -196,12 +196,12 @@ def plan():
 
 def test_a_plan_holds_the_phases_and_what_they_are_worth(plan):
     assert plan.names == PHASE_NAMES
-    assert len(plan) == 14
+    assert len(plan) == 15
     assert list(iter(plan)) == list(PHASES)
     assert "pd.core" in plan
     assert "not.a.phase" not in plan
     assert plan.weight("pd.core") == 5
-    assert str(plan) == "LoadPlan fm-synth (14 steps, window)"
+    assert str(plan) == "LoadPlan fm-synth (15 steps, window)"
 
 
 def test_finding_a_step_by_name_says_nothing_when_it_is_not_there(plan):
@@ -276,7 +276,7 @@ def test_asking_a_plan_for_a_phase_it_does_not_run_says_so(plan):
 
 def test_a_plan_describes_itself_as_a_numbered_list(plan):
     lines = plan.describe()
-    assert len(lines) == 14
+    assert len(lines) == 15
     assert lines[0].startswith(" 1. manifest")
     assert lines[0].endswith("the manifest")
     # number, name, weight, label - and the weights line up in a column
@@ -375,7 +375,7 @@ def report(plan):
 
 
 def test_a_fresh_report_has_one_record_per_step_in_order(report, plan):
-    assert len(report) == 14
+    assert len(report) == 15
     assert [entry.name for entry in report] == list(plan.names)
     assert report.percent == 0
     assert report.ok is False
@@ -424,12 +424,12 @@ def test_a_report_that_never_failed_and_never_finished_is_not_ok(report):
 
 
 def test_the_summary_says_how_far_the_run_got(report):
-    assert report.summary() == "stopped after 0 of 14 steps (0%); 14 never ran"
+    assert report.summary() == "stopped after 0 of 15 steps (0%); 15 never ran"
 
     for entry in report:
         entry.started = entry.done = True
         entry.fraction = 1.0
-    assert report.summary() == "loaded 14 of 14 steps (100%)"
+    assert report.summary() == "loaded 15 of 15 steps (100%)"
 
 
 def test_a_run_that_ran_out_of_steps_without_failing_says_so(report):
@@ -437,7 +437,7 @@ def test_a_run_that_ran_out_of_steps_without_failing_says_so(report):
     entry.started = entry.done = True
     entry.fraction = 1.0
 
-    assert report.summary() == "stopped after 1 of 14 steps (2%); 13 never ran"
+    assert report.summary() == "stopped after 1 of 15 steps (2%); 14 never ran"
 
 
 def test_a_cancellation_is_worded_differently_from_a_failure(report):
@@ -479,7 +479,7 @@ def test_a_report_document_is_json_ready(report):
     assert document["failed"] is None
     assert document["error"] is None
     assert document["cancelled"] is False
-    assert len(document["steps"]) == 14
+    assert len(document["steps"]) == 15
     assert json.loads(report.to_json())["percent"] == round(report.percent, 2)
 
 
@@ -511,7 +511,7 @@ def test_a_whole_run_reports_every_phase_once_in_order(tracker, recorded):
     report = run_all(tracker)
 
     kinds = [call[0] for call in recorded.calls]
-    assert kinds == ["start"] + ["begin", "end"] * 14 + ["finish"]
+    assert kinds == ["start"] + ["begin", "end"] * 15 + ["finish"]
     assert [call[1] for call in recorded.calls if call[0] == "begin"] == list(PHASE_NAMES)
     assert report.ok is True
     assert report.percent == 100
@@ -675,7 +675,7 @@ def test_failing_a_phase_that_never_started_still_names_it(tracker, recorded):
 
     assert record.started is True
     assert record.message.endswith("presets is a file")
-    assert recorded.calls[:3] == [("start", "fm-synth", 14),
+    assert recorded.calls[:3] == [("start", "fm-synth", 15),
                                   ("begin", "presets"),
                                   ("end", "presets", False, 0.0)]
 
@@ -722,7 +722,7 @@ def test_progress_inside_a_phase_moves_the_percentage(tracker, recorded):
         tracker.progress("images", 9.0)  # a silly caller is clamped, not trusted
 
     assert recorded.calls == [
-        ("start", "fm-synth", 14),
+        ("start", "fm-synth", 15),
         ("begin", "images"), ("progress", "images", 0.5),
         ("progress", "images", 1.0), ("end", "images", True, 1.0),
     ]
@@ -811,21 +811,21 @@ def console_run(tracker, console, out):
 def test_a_successful_run_is_one_line_per_phase_and_a_summary(console_run):
     _report, console, out = console_run
 
-    assert len(console.lines) == 15
+    assert len(console.lines) == 16
     assert console.lines[0] == console_line(2, "manifest", "ok", "the manifest")
     assert console.lines[0] == "[  2%] manifest           ok   the manifest"
     assert console.lines[3] == console_line(20, "audio.device", "ok",
                                             "the audio device")
-    assert console.lines[13] == console_line(100, "runtime.activate", "ok",
+    assert console.lines[14] == console_line(100, "runtime.activate", "ok",
                                              "the runtime")
-    assert console.lines[-1] == "loaded 14 of 14 steps (100%)"
+    assert console.lines[-1] == "loaded 15 of 15 steps (100%)"
     assert out.getvalue().splitlines() == console.lines
 
 
 def test_the_percent_column_always_lines_up(console_run):
     _report, console, _out = console_run
 
-    assert {line.index("%]") for line in console.lines[:14]} == {4}
+    assert {line.index("%]") for line in console.lines[:15]} == {4}
 
 
 def test_a_phase_says_what_it_found_under_itself(tracker, console):
@@ -840,7 +840,7 @@ def test_a_phase_says_what_it_found_under_itself(tracker, console):
         console_line(12, "resources.validate", "ok", "the declared files"),
         "       assets/knob_atlas.png",
         "       assets/array.txt",
-        "stopped after 1 of 14 steps (8%); 13 never ran",
+        "stopped after 1 of 15 steps (8%); 14 never ran",
     ]
 
 
@@ -858,7 +858,7 @@ def test_a_failure_line_carries_the_reason_and_the_run_stops_there(tracker, cons
     assert console.lines[0].startswith("[  2%] manifest")
     assert console.lines[-2] == console_line(12, "audio.device", "FAIL",
                                              "load step 'audio.device' failed: no device")
-    assert console.lines[-1] == "failed at audio.device after 3 of 14 steps (12%)"
+    assert console.lines[-1] == "failed at audio.device after 3 of 15 steps (12%)"
     assert any("FAIL" in line for line in console.lines)
 
 
@@ -881,10 +881,10 @@ def test_a_quiet_reporter_prints_the_plan_first_when_asked(out, plan):
     reporter = ConsoleReporter(out, show_plan=True)
     reporter.start(plan)
 
-    assert reporter.lines[0] == "fm-synth (window) - 14 steps, 100 weight"
+    assert reporter.lines[0] == "fm-synth (window) - 15 steps, 100 weight"
     assert reporter.lines[1].strip().split() == ["1.", "manifest", "2%", "the",
                                                  "manifest"]
-    assert len(reporter.lines) == 15
+    assert len(reporter.lines) == 16
 
 
 def test_a_reporter_with_no_plan_yet_still_finishes_the_run(console, plan):
@@ -894,7 +894,7 @@ def test_a_reporter_with_no_plan_yet_still_finishes_the_run(console, plan):
 
     console.finish(report)
 
-    assert console.lines == ["stopped after 1 of 14 steps (2%); 13 never ran"]
+    assert console.lines == ["stopped after 1 of 15 steps (2%); 14 never ran"]
 
 
 def test_details_of_a_step_that_never_ended_are_still_shown(tracker, console):
@@ -942,11 +942,11 @@ def test_a_json_run_is_one_document_per_event(jsonl, plan):
 
     events = [json.loads(line) for line in out.getvalue().splitlines()]
     assert [event["event"] for event in events] == (
-        ["start"] + ["step_begin", "step_end"] * 14 + ["finish"]
+        ["start"] + ["step_begin", "step_end"] * 15 + ["finish"]
     )
     assert events[0]["label"] == "fm-synth"
     assert events[0]["total"] == 100
-    assert len(events[0]["steps"]) == 14
+    assert len(events[0]["steps"]) == 15
 
 
 def test_every_json_event_carries_the_percentage_it_was_at(jsonl, plan):
@@ -987,8 +987,8 @@ def test_the_machine_report_ends_with_the_whole_run(jsonl, plan):
     assert finish["ok"] is True
     assert finish["percent"] == 100
     assert finish["failed"] is None
-    assert finish["summary"] == "loaded 14 of 14 steps (100%)"
-    assert len(finish["steps"]) == 14
+    assert finish["summary"] == "loaded 15 of 15 steps (100%)"
+    assert len(finish["steps"]) == 15
     assert finish["steps"][9]["label"] == "the images"
 
 
@@ -1061,7 +1061,7 @@ def test_a_splash_is_a_frame_at_every_step_boundary(plan):
     assert canvas.frames[-2].step == "runtime.activate"
     assert canvas.frames[-2].percent == 100
     assert canvas.events[-1] == "finish"
-    assert canvas.frames[-1].message == "loaded 14 of 14 steps (100%)"
+    assert canvas.frames[-1].message == "loaded 15 of 15 steps (100%)"
     assert canvas.frames[-1].done is True
     assert canvas.frames[-1].failed is False
 
@@ -1105,7 +1105,7 @@ def test_a_failure_is_drawn_rather_than_only_printed(plan):
     last = canvas.frames[-1]
     assert last.failed is True
     assert "no device" in canvas.frames[-2].message
-    assert last.message == "failed at audio.device after 3 of 14 steps (12%)"
+    assert last.message == "failed at audio.device after 3 of 15 steps (12%)"
     # the bar stays where the finished work is, not where the broken step hoped to get
     assert canvas.frames[-2].percent == 12
 
@@ -1122,7 +1122,7 @@ def test_a_splash_that_cannot_draw_hands_over_to_the_console(out, plan):
     assert canvas.frames == []
     assert report.ok is True
     assert console.lines[0] == console_line(2, "manifest", "ok", "the manifest")
-    assert console.lines[-1] == "loaded 14 of 14 steps (100%)"
+    assert console.lines[-1] == "loaded 15 of 15 steps (100%)"
 
 
 def test_a_splash_that_dies_halfway_does_not_lose_the_rest_of_the_run(out, plan):
@@ -1142,7 +1142,7 @@ def test_a_splash_that_dies_halfway_does_not_lose_the_rest_of_the_run(out, plan)
     assert len(canvas.frames) == 2
     # the console picked up every event from the failure onwards
     assert console.lines[0] == console_line(2, "manifest", "ok", "the manifest")
-    assert console.lines[-1] == "stopped after 3 of 14 steps (12%); 11 never ran"
+    assert console.lines[-1] == "stopped after 3 of 15 steps (12%); 12 never ran"
     assert len([line for line in console.lines if line.startswith("[")]) == 3
 
 

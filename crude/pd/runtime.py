@@ -174,9 +174,15 @@ class PdRuntime:
 
     # -- callbacks ------------------------------------------------------
     def on_pd(self, patch_id: str, recv: str, func, kinds=None) -> PdHandler:
-        handler = PdHandler(patch_id, self.receiver(patch_id, recv), func,
+        wanted = self.receiver(patch_id, recv)
+        handler = PdHandler(patch_id, wanted, func,
                             tuple(kinds) if kinds else ())
         self.handlers.append(handler)
+        # libpd only fires its bang/float/list/symbol hooks for a receiver that
+        # has been bound; without this an ON_PD handler is registered but never
+        # hears the patch's [send], and a metronome whose [metro] bangs a [s tick]
+        # stays silent no matter how many blocks the stream renders.
+        self.session.bind(wanted)
         return handler
 
     def off_pd(self, patch_id: str, recv: str, func=None) -> int:
@@ -187,6 +193,11 @@ class PdRuntime:
             if not (h.patch_id == patch_id and h.recv == wanted
                     and (func is None or h.func is func))
         ]
+        # release the libpd binding only when nothing still listens: an unbind
+        # while another handler wants the same symbol would silence it
+        if before != len(self.handlers) and not any(
+                h.recv == wanted for h in self.handlers):
+            self.session.unbind(wanted)
         return before - len(self.handlers)
 
     def dispatch(self, events=None) -> int:

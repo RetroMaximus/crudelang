@@ -18,10 +18,13 @@
 # tests/lang/test_binding_args.py), so this file is free to name its boxes what
 # they are - ``mix`` below is simply the name that was already here.
 #
-# Run it:   python -m crude run examples/fm_synth --mode headless
+# Run it:   python -m crude run examples/fm_synth
+#           The manifest asks for a window; the voice is silent until a person
+#           presses Play/Stop (it opens with gate 0), and a headless run - the
+#           no-window mode - has no button to press, so it sits silent on purpose.
 # Check it: python -m crude check examples/fm_synth
 
-VAR p = PD_BUILD("fm", 520, 320)
+VAR p = PD_BUILD("fm", 640, 420)
 
 VAR r_pitch = PD_OBJ(p, "r pitch",   30,  30)
 VAR mtof    = PD_OBJ(p, "mtof 0.",   30,  60)
@@ -35,7 +38,13 @@ VAR r_gate  = PD_OBJ(p, "r gate",    30, 150)
 VAR env     = PD_OBJ(p, "line~",     30, 180)
 VAR r_gain  = PD_OBJ(p, "r gain",   130, 150)
 VAR sig_gain = PD_OBJ(p, "sig~",    130, 180)
+VAR r_level = PD_OBJ(p, "r level",  230, 150)
+VAR sig_level = PD_OBJ(p, "sig~ 1", 230, 180)
+VAR gateamp = PD_OBJ(p, "*~",       230, 210)
 VAR amp     = PD_OBJ(p, "*~",        30, 210)
+VAR r_cut   = PD_OBJ(p, "r cutoff", 230,  90)
+VAR scut    = PD_OBJ(p, "sig~ 2000",230, 120)
+VAR lp      = PD_OBJ(p, "lop~ 2000",130, 210)
 VAR mix     = PD_OBJ(p, "*~",        30, 240)
 VAR out     = PD_OBJ(p, "dac~",      30, 280)
 VAR curve   = PD_TABLE(p, "modindex", 8, 260, 30)
@@ -52,12 +61,26 @@ PD_LINK(p, mod, dev)
 PD_LINK(p, dev, add, 0, 1)
 # the summed frequency is what the carrier actually runs at
 PD_LINK(p, add, car)
-# gate opens the envelope, gain sets the level, both are signal-rate multiplies
+# gate opens the envelope, the Level knob trims how far it opens, gain sets the
+# output level - gate is a 0/1 trigger (line~), level is a constant multiplier so
+# Play and the knob never fight over one receiver
 PD_LINK(p, r_gate, env)
+PD_LINK(p, r_level, sig_level)
+PD_LINK(p, env, gateamp)
+PD_LINK(p, sig_level, gateamp, 0, 1)
 PD_LINK(p, r_gain, sig_gain)
 PD_LINK(p, car, amp)
-PD_LINK(p, env, amp, 0, 1)
-PD_LINK(p, amp, mix)
+PD_LINK(p, gateamp, amp, 0, 1)
+# a lowpass shapes the tone after the envelope; the Cutoff knob drives
+# "cutoff" and a sig~ turns that control number into the filter's cutoff signal.
+# [vcf~] was tried first and rejected: it is a band-pass whose bandwidth inlet
+# is a float inlet, and left undriven that bandwidth is 0 - the measured output
+# was silence even tuned onto the signal.
+# [lop~] passes everything below the cutoff and its signal inlet is real.
+PD_LINK(p, r_cut, scut)
+PD_LINK(p, amp, lp)
+PD_LINK(p, scut, lp, 0, 1)
+PD_LINK(p, lp, mix)
 PD_LINK(p, sig_gain, mix, 0, 1)
 PD_LINK(p, mix, out, 0, 0)
 PD_LINK(p, mix, out, 0, 1)
@@ -76,7 +99,9 @@ VAR bell = PRESET_LOAD("bell")
 PD_SEND(p, "pitch", GET(bell, "pitch"))
 PD_SEND(p, "index", GET(bell, "index"))
 PD_SEND(p, "gain", GET(bell, "gain"))
-PD_SEND(p, "gate", 1)
+# the voice opens silent: the gate is 0 until the Play button lifts it, so the
+# scope is a flat line at rest and only comes alive when a person asks for sound
+PD_SEND(p, "gate", 0)
 
 # Saving one is the same door the other way: whatever the knobs would say.
 #
@@ -90,6 +115,84 @@ LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")
 # A widget wired back into the patch. A knob is not a box vanilla Pd ships, so
 # its twin is an [hslider] - PD_EMIT writes the range the patch already reads,
 # and dragging the dial sends "index" straight in, the way a hardware knob does.
-VAR knob  = KNOB("Index", 0, 12, 7)
-PLACE(knob, 24, 224, 70, 70)
-ON_CHANGE(knob, FUNC(v) -> PD_SEND(p, "index", v))
+#
+# The whole control surface, then: every receiver the patch declares has exactly
+# one widget driving it, so touching a control is heard. The voice opens silent
+# (gate 0); the Play/Stop toggle lifts the gate, and the Level knob trims the
+# sustain it opens to - two separate receivers so they never fight. Small knobs
+# put their name on top so a 64-pixel dial still says what it is.
+VAR pitch = NUMBER("Pitch", 0, 127, 69)
+VAR gain  = SLIDER("Gain", 0, 1, 0.2)
+VAR index = KNOB("Index", 0, 12, 7)
+VAR gate  = KNOB("Level", 0, 1, 1)
+VAR cut   = KNOB("Cutoff", 20, 20000, 2000)
+VAR dsp   = TOGGLE("DSP", 1)
+VAR play  = TOGGLE("Play/Stop")
+
+PLACE(pitch, 24,  52,  96, 26)
+PLACE(gain,  24,  90, 150, 24)
+PLACE(index, 24, 140,  64, 64)
+PLACE(gate,  106, 140, 64, 64)
+PLACE(cut,   188, 140, 64, 64)
+PLACE(dsp,   24,  224, 96, 28)
+PLACE(play,  24,  260, 120, 30)
+
+# a log-scale cutoff (20..20000 Hz) and names pushed above the dials
+SET(cut, "log", 1)
+SET(index, "label_place", "top")
+SET(gate, "label_place", "top")
+SET(cut, "label_place", "top")
+SET(play, "glyph_off", "play")
+SET(play, "glyph_on", "pause")
+
+# the three canvases: a scope of the output, a graph of the modindex array, and a
+# line of text the frame handler rewrites from whatever the controls now say.
+VAR scope = WAVEFORM("Output")
+VAR graph = PLOT("modindex")
+VAR log   = LOGVIEW("log")
+PLACE(scope, 336,  52, 280, 150)
+PLACE(graph, 336,  218, 280, 96)
+PLACE(log,   0,  395, 640, 30)
+
+ON_CHANGE(pitch, FUNC(v) -> PD_SEND(p, "pitch", v))
+ON_CHANGE(gain,  FUNC(v) -> PD_SEND(p, "gain", v))
+ON_CHANGE(index, FUNC(v) -> PD_SEND(p, "index", v))
+ON_CHANGE(gate,  FUNC(v) -> PD_SEND(p, "level", v))
+ON_CHANGE(cut,   FUNC(v) -> PD_SEND(p, "cutoff", v))
+ON_CHANGE(dsp,   FUNC(v) -> PD_DSP(v))
+ON_CHANGE(play,  FUNC(v) -> PD_SEND(p, "gate", v))
+
+# Every frame the scope reads the last block off the output and the graph reads
+# the table; the status line says playing with the numbers it is playing at, or
+# stopped - the same flat-vs-live difference the scope shows in its trace.
+FUNC frame(dt)
+    SET(scope, "data", AUDIO_WAVEFORM(256))
+    SET(graph, "data", PD_ARRAY_READ(p, "modindex"))
+    VAR line = "stopped"
+    IF GET(play, "value") > 0 THEN
+        VAR line = "playing @ pitch " + STR(GET(pitch, "value"))
+        VAR line = line + ", index " + STR(GET(index, "value"))
+        VAR line = line + ", gain " + STR(GET(gain, "value"))
+    END
+    SET(log, "lines", [line])
+END
+ON_FRAME(frame)
+
+# The runtime menu, built from ordinary widgets by the reusable MENU_* framework
+# (see docs/widgets.md). Building the bar is widget arithmetic only: it queries
+# no audio or MIDI device until a person opens one of those dialogs. A run with
+# no window still builds it - there is simply nothing to click. That is the whole
+# of what "safe" meant here; the sound itself is never simulated.
+VAR bar         = MENUBAR("menu")
+VAR file_menu   = MENU(bar, "File")
+VAR audio_menu  = MENU(bar, "Audio")
+VAR midi_menu   = MENU(bar, "MIDI")
+VAR serial_menu = MENU(bar, "Serial")
+
+MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("fm", [GET(pitch, "value"), GET(gain, "value"), GET(index, "value")]))
+MENU_ADD(file_menu, "Load bell", FUNC() -> SET(log, "lines", [STR(PRESET_LOAD("bell"))]))
+MENU_ADD(audio_menu, "Unmute", FUNC() -> PD_DSP(1))
+MENU_ADD(audio_menu, "Mute", FUNC() -> PD_DSP(0))
+MENU_AUDIO_DIALOG(audio_menu)
+MENU_MIDI_DIALOG(midi_menu)
+MENU_ADD(serial_menu, "No serial link", FUNC() -> LOG("fm-synth declares no serial port"))

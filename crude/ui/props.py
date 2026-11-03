@@ -67,6 +67,13 @@ PD_BOXES: Tuple[str, ...] = ("bng", "cnv", "dropdown", "hslider", "nbx", "radio"
 _TRUE_WORDS = ("true", "yes", "on", "1")
 _FALSE_WORDS = ("false", "no", "off", "0")
 
+#: where a widget's name and its readout are painted. ``inside`` keeps the
+#  words centred in the box (the plate-and-label default); a side draws the
+#  word just outside that edge of the box, which is what lets a 25x25 knob
+#  still say its name; ``none`` hides the word entirely.
+PLACE_MODES: Tuple[str, ...] = ("inside", "top", "bottom", "left", "right",
+                                "none")
+
 
 class PropError(UIError):
     """A prop that does not exist, or a value that cannot mean anything.
@@ -558,6 +565,26 @@ _COMMON: Tuple[Prop, ...] = (
     _row("label", "string", "",
          "Text drawn on or beside the widget; also the Pd box's own label.",
          pd="label"),
+    # where the name and the value/readout go, and how far to nudge them. A
+    # side placement draws the word outside the box, so a tiny knob whose dial
+    # has no room for its caption still shows it; the offsets are the escape
+    # hatch when a bare side is not quite the right gap. None of them is a Pd
+    # box argument, so PD_EMIT skips every one.
+    _row("label_place", "string", "inside",
+         "Where the name is drawn: 'inside' centres it in the box, a side "
+         "('top'/'bottom'/'left'/'right') puts it outside that edge, 'none' "
+         "hides it.", choices=PLACE_MODES),
+    _row("value_place", "string", "inside",
+         "Where the numeric readout is drawn, in the same words as "
+         "'label_place'.", choices=PLACE_MODES),
+    _row("label_dx", "number", 0.0,
+         "Nudge the name right this many logical pixels (negative goes left)."),
+    _row("label_dy", "number", 0.0,
+         "Nudge the name down this many logical pixels (negative goes up)."),
+    _row("value_dx", "number", 0.0,
+         "Nudge the readout right this many logical pixels."),
+    _row("value_dy", "number", 0.0,
+         "Nudge the readout down this many logical pixels."),
     _row("send", "string", "",
          "Pd symbol the widget sends its value to when it changes.", pd="send"),
     _row("recv", "string", "",
@@ -620,6 +647,10 @@ _VALUE: Dict[str, Prop] = {
                   rng=(0.0, None)),
     "editable": _row("editable", "bool", True,
                      "Whether the value can be typed into it or only dragged."),
+    "decimals": _row("decimals", "number", 2.0,
+                     "How many places after the point the readout shows; 0 is "
+                     "whole numbers, -1 every digit the value holds.",
+                     rng=(-1.0, 12.0)),
 }
 
 #: the rows about a list of choices - the two kinds whose value is an index
@@ -651,6 +682,13 @@ _SYNTH: Dict[str, Prop] = {
     "bins": _row("bins", "number", 0.0,
                  "How many bars the spectrum draws; 0 is as many as ``data`` "
                  "holds."),
+    "lines": _row("lines", "list", (),
+                  "The text rows a log view shows, oldest first; the face draws "
+                  "the tail that fits the box, newest at the bottom."),
+    "scroll": _row("scroll", "number", 0.0,
+                   "How many lines the log view is scrolled up from the newest; "
+                   "0 sits at the bottom, the wheel and a drag change it.",
+                   rng=(0.0, None)),
     "attack": _row("attack", "number", 0.0,
                    "The envelope's attack, in the patch's own units of time.",
                    rng=(0.0, None)),
@@ -838,6 +876,15 @@ def _kind(name: Any, pd_object: str = "", base: Any = "", hint: str = "",
         props[template.name] = template.copy(kind=name)
         if template.name not in declared:
             declared.append(template.name)
+
+    # every widget that holds a value rounds its readout: the digits row rides
+    # with the value row rather than being named at every declaration, because
+    # "how many places does 80.1121402345 show as" is the same question for a
+    # slider, a number box and a knob, and a kind cannot hold a value and
+    # legitimately not have one
+    if "value" in props and "decimals" not in props:
+        props["decimals"] = _TEMPLATE["decimals"].copy(kind=name)
+        declared.append("decimals")
 
     for asked, changes in tweak.items():
         prop = props.get(_name(asked))
@@ -1216,6 +1263,17 @@ _kind("waveform", "", hint="A rolling trace of samples, drawn from data a "
 _kind("spectrum", "", hint="Magnitudes as bars; the script does the FFT and "
       "writes the bins.", args=("label",), rows=("data", "bins"),
       role={"default": "grid"})
+# the two general canvases: a plot is a waveform's cousin that graphs any value
+# list (an array read, a parameter history) against its own span, and a log view
+# is a scrollable wall of text. Neither twins to a Pd box; the script feeds rows
+# in through ``SET`` the same way it feeds ``data`` to a scope.
+_kind("plot", "", hint="A line graph of any value list, autoscaled to the span it "
+      "holds - the array's own min and max set the axis, not a fixed full scale.",
+      args=("label",), rows=("data", "points"),
+      role={"default": "grid"})
+_kind("logview", "", hint="A scrollable text area; the script appends rows to "
+      "``lines`` and the newest that fit are shown, the wheel scrolling them.",
+      args=("label",), rows=("lines", "scroll"), role={"default": "grid"})
 # adsr and keybed hold a value but own no min/max rows, so value restates its
 # own bounds the way button and toggle do - the range is the table's promise,
 # not something a script can move out from under the face
