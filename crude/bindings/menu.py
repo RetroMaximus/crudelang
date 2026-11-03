@@ -55,6 +55,7 @@ from ..lang.values import (
 )
 from ..ui.menu import Menu, MenuBar
 from ..ui.widget import Widget
+from ..ui.workspace import WorkspaceError
 from .registry import binding
 
 AREA = "ui"
@@ -549,8 +550,60 @@ def menu_serial_dialog(ctx):
     return _widget_handle(dialog.popup)
 
 
+# -- the workspace switch ------------------------------------------------
+
+
+def _switch(window, name: str) -> None:
+    """Show one scene from a menu row, and say it if the scene has gone.
+
+    A row is built from a name read a moment ago and clicked a minute later, and a
+    script may have no way to take the row away again - so a scene that is not there
+    any more is a log line rather than an exception travelling back out through the
+    pointer's dispatch, which would leave the popup open and the frame unfinished.
+    """
+    try:
+        window.workspaces.show(name)
+    except WorkspaceError as exc:
+        bridge = getattr(window, "handlers", None)
+        errors = getattr(bridge, "errors", None)
+        if isinstance(errors, list):
+            errors.append(f"menu: {exc}")
+        speak = getattr(bridge, "log", None)
+        if callable(speak):
+            speak(f"menu: {exc}")
+
+
+@binding("MENU_WORKSPACES", ["menu"], area=AREA,
+         doc="One row per workspace, the current one ticked; picking one shows it.")
+def menu_workspaces(ctx):
+    """``MENU_WORKSPACES(view_menu)``: the scene switch, with no loop in the script.
+
+    The rows are rebuilt every time the popup opens, from the window's own list, so
+    a project that declares a scene late - or from a handler - is in the menu the
+    next time the person clicks ``View`` without having to be asked to refresh it.
+    Each row is a checkable item whose tick means "this is what is on screen", and
+    picking a row is ``WORKSPACE_SHOW`` for that name.
+    """
+    window = _window(ctx)
+    menu = _menu(ctx)
+
+    def rebuild(held: Menu) -> None:
+        """Throw the rows away and compose them from the scenes there are now."""
+        held.clear_items()
+        for name in window.workspaces.names():
+            held.add_item(name, callback=lambda _row, said=name: _switch(window, said),
+                          checkable=True,
+                          on=(name == window.workspaces.current_name))
+
+    if rebuild not in menu.opening:
+        menu.opening.append(rebuild)
+    rebuild(menu)
+    return Number(float(len(menu.items)))
+
+
 #: Names this module registers, used by the binding-help generator and tests.
 BINDINGS = (
     "MENUBAR", "MENU", "MENU_ADD", "MENU_CHECK", "MENU_SHOW", "MENU_HIDE",
+    "MENU_WORKSPACES",
     "MENU_AUDIO_DIALOG", "MENU_MIDI_DIALOG", "MENU_SERIAL_DIALOG",
 )

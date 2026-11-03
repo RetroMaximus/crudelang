@@ -12,7 +12,8 @@
   },
   "ui": {
     "theme": "dark",
-    "icons": "generated"
+    "icons": "generated",
+    "workspaces": ["voices"]
   },
   "audio": {
     "backend": "sounddevice",

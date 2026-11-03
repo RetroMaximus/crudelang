@@ -16,6 +16,8 @@ bounded ``run(max_frames=N)`` means no loop ever turns into a hang.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from crude.errors import EXIT_OK, EXIT_RUNTIME, ExitRequest
@@ -100,12 +102,12 @@ def test_a_tick_with_no_ui_skips_the_frame_report_but_still_counts(host):
 def test_a_frame_over_budget_is_counted_and_named_once(host, recording):
     from crude.ui.context import UIContext
 
-    clock = FakeClock(target_fps=60)
-    host.clock = clock
     # a UIContext whose renderer never produces ops is still a frame; the
     # budget check reads the elapsed ms, and a test's clock says 0 ms, so a
     # caller that wants to trip it hands a budget of 0
     ui = UIContext(recording, width=320, height=200, painting=False)
+    clock = FakeClock(target_fps=60)
+    host.clock = clock
     host.ui = ui
     loop = Runtime(host, mode="headless", clock=clock, ui=ui, budget=0.0)
     loop.activate(host)
@@ -118,6 +120,51 @@ def test_a_frame_over_budget_is_counted_and_named_once(host, recording):
     # frame report was recorded and the counter tracks over-budget frames
     assert len(loop.frame_reports) == 1
     assert loop.budget_hits in (0, 1)
+
+
+def _scenes_manifest(names):
+    """A manifest whose ``ui`` section says which scenes the project has."""
+    return types.SimpleNamespace(
+        runtime=types.SimpleNamespace(width=320, height=200, target_fps=60,
+                                      vsync=False, mode="headless"),
+        ui=types.SimpleNamespace(theme="dark", workspaces=names))
+
+
+def test_the_scenes_the_manifest_named_are_reserved_before_the_run(make_host):
+    """``ui.workspaces`` names the pages; the loop gives the context those numbers.
+
+    Naming is not showing: the entry script's scene stays the one on screen until a
+    ``WORKSPACE`` or a ``WORKSPACE_SHOW`` says otherwise, so a project that lists four
+    pages and draws one still runs.
+    """
+    from crude.ui.context import UIContext
+
+    host = make_host(manifest=_scenes_manifest(("sampler", "mixer")))
+    ui = UIContext(None, width=320, height=200, painting=False)
+    loop = Runtime(host, mode="headless", clock=host.clock, ui=ui)
+    loop.activate(host)
+
+    assert ui.workspaces.names() == ["root", "sampler", "mixer"]
+    assert ui.workspaces.current_name == "root"
+    assert ui.workspaces.index_of("mixer") == 2
+
+
+def test_a_manifest_that_names_nothing_leaves_the_window_with_one_scene(host):
+    loop = Runtime(host, mode="headless", clock=host.clock)
+    loop.activate(host)
+
+    assert loop.ui.workspaces.names() == ["root"]
+
+
+def test_a_ui_that_is_not_a_context_is_seeded_with_nothing_said(make_host):
+    """A host object with no ``workspaces`` is a host object, not an error."""
+    host = make_host(manifest=_scenes_manifest(("mixer",)))
+    loop = Runtime(host, mode="headless", clock=host.clock,
+                   ui=types.SimpleNamespace())
+    loop.activate(host)
+
+    assert loop.frames == 0
+    assert not loop.notes
 
 
 # -- the audio half -----------------------------------------------------

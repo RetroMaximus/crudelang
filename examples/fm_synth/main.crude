@@ -116,55 +116,100 @@ LOG("fm-synth: " + STR(PD_DOLLARZERO(p)) + " is this patch's $0")
 # its twin is an [hslider] - PD_EMIT writes the range the patch already reads,
 # and dragging the dial sends "index" straight in, the way a hardware knob does.
 #
-# The whole control surface, then: every receiver the patch declares has exactly
-# one widget driving it, so touching a control is heard. The voice opens silent
-# (gate 0); the Play/Stop toggle lifts the gate, and the Level knob trims the
-# sustain it opens to - two separate receivers so they never fight. Small knobs
-# put their name on top so a 64-pixel dial still says what it is.
+# The control surface is split over two named scenes of this one window (see
+# "Workspaces" in docs/bindings.md): the page below is ``root``, the entry
+# script's own - what a person plays with - and the FM parameters live on a
+# second page called ``voices``, built out of a scroll area. The manifest
+# declares the name of that second page, and the View menu lists both.
 VAR pitch = NUMBER("Pitch", 0, 127, 69)
 VAR gain  = SLIDER("Gain", 0, 1, 0.2)
-VAR index = KNOB("Index", 0, 12, 7)
-VAR gate  = KNOB("Level", 0, 1, 1)
-VAR cut   = KNOB("Cutoff", 20, 20000, 2000)
 VAR dsp   = TOGGLE("DSP", 1)
 VAR play  = TOGGLE("Play/Stop")
 
 PLACE(pitch, 24,  52,  96, 26)
 PLACE(gain,  24,  90, 150, 24)
-PLACE(index, 24, 140,  64, 64)
-PLACE(gate,  106, 140, 64, 64)
-PLACE(cut,   188, 140, 64, 64)
 PLACE(dsp,   24,  224, 96, 28)
 PLACE(play,  24,  260, 120, 30)
 
-# a log-scale cutoff (20..20000 Hz) and names pushed above the dials
-SET(cut, "log", 1)
-SET(index, "label_place", "top")
-SET(gate, "label_place", "top")
-SET(cut, "label_place", "top")
 SET(play, "glyph_off", "play")
 SET(play, "glyph_on", "pause")
 
-# the three canvases: a scope of the output, a graph of the modindex array, and a
-# line of text the frame handler rewrites from whatever the controls now say.
+# the two canvases that belong to the pitch-and-level page: a scope of the output
+# and a line of text the frame handler rewrites from whatever the controls say.
+# (the modindex graph is on the voices page, beside the parameter it graphs)
 VAR scope = WAVEFORM("Output")
-VAR graph = PLOT("modindex")
 VAR log   = LOGVIEW("log")
 PLACE(scope, 336,  52, 280, 150)
-PLACE(graph, 336,  218, 280, 96)
 PLACE(log,   0,  395, 640, 30)
 
 ON_CHANGE(pitch, FUNC(v) -> PD_SEND(p, "pitch", v))
 ON_CHANGE(gain,  FUNC(v) -> PD_SEND(p, "gain", v))
+ON_CHANGE(dsp,   FUNC(v) -> PD_DSP(v))
+ON_CHANGE(play,  FUNC(v) -> PD_SEND(p, "gate", v))
+
+# -- the voices page ---------------------------------------------------
+#
+# WORKSPACE("voices") declares the scene and shows it, so every widget built
+# under this comment belongs to it and nothing above moves: the front panel is
+# carried off screen, with its knobs exactly where they were, and comes back on
+# the same numbers when the View menu picks root again.
+WORKSPACE("voices")
+
+# the page is a viewport (docs/widgets.md), so what does not fit the window is
+# reached by wheel, by the thumb or by the page keys rather than drawn past the
+# bottom edge - which is the whole reason a settings page is allowed to be long
+VAR page  = SCROLL("fm parameters")
+VAR index = KNOB("Index", 0, 12, 7)
+VAR gate  = KNOB("Level", 0, 1, 1)
+VAR cut   = KNOB("Cutoff", 20, 20000, 2000)
+VAR graph = PLOT("modindex")
+VAR note_index = TEXT("Index - how far the modulator pushes the carrier off pitch")
+VAR note_level = TEXT("Level - where the envelope opens to: Play lifts the gate, this holds it")
+VAR note_cut   = TEXT("Cutoff - a lop~ after the envelope; 20 is mute, 20000 is the voice bare")
+VAR note_view  = TEXT("the View menu switches between this page and the front panel")
+
+# NODE_ADD is what puts a control *inside* the viewport. PLACE alone only moves a
+# widget, so a knob left as a sibling of the page would be drawn past its bottom
+# edge instead of being part of the content that scrolls; added to the page, the
+# coordinates below measure from the top of the content rather than from the top
+# of the window, and the last line - 440 down a 356-tall view - is off the page
+# until a person asks for it
+PLACE(page, 0, 0, 640, 356)
+NODE_ADD(page, index)
+NODE_ADD(page, gate)
+NODE_ADD(page, cut)
+NODE_ADD(page, graph)
+NODE_ADD(page, note_index)
+NODE_ADD(page, note_level)
+NODE_ADD(page, note_cut)
+NODE_ADD(page, note_view)
+
+PLACE(index, 24,   8,  64, 64)
+PLACE(gate,  106,  8,  64, 64)
+PLACE(cut,   188,  8,  64, 64)
+PLACE(graph, 24,  96, 592, 140)
+PLACE(note_index, 24, 260, 592, 20)
+PLACE(note_level, 24, 300, 592, 20)
+PLACE(note_cut,   24, 340, 592, 20)
+PLACE(note_view,  24, 420, 592, 20)
+
+# a log-scale cutoff (20..20000 Hz) and names pushed above the dials, so a
+# 64-pixel dial still says what it is
+SET(cut, "log", 1)
+SET(index, "label_place", "top")
+SET(gate, "label_place", "top")
+SET(cut, "label_place", "top")
+
 ON_CHANGE(index, FUNC(v) -> PD_SEND(p, "index", v))
 ON_CHANGE(gate,  FUNC(v) -> PD_SEND(p, "level", v))
 ON_CHANGE(cut,   FUNC(v) -> PD_SEND(p, "cutoff", v))
-ON_CHANGE(dsp,   FUNC(v) -> PD_DSP(v))
-ON_CHANGE(play,  FUNC(v) -> PD_SEND(p, "gate", v))
 
 # Every frame the scope reads the last block off the output and the graph reads
 # the table; the status line says playing with the numbers it is playing at, or
 # stopped - the same flat-vs-live difference the scope shows in its trace.
+#
+# The frame runs whichever page is on screen: the widgets it reads and writes are
+# carried between scenes rather than rebuilt, so the numbers are honest from both.
 FUNC frame(dt)
     SET(scope, "data", AUDIO_WAVEFORM(256))
     SET(graph, "data", PD_ARRAY_READ(p, "modindex"))
@@ -185,9 +230,14 @@ ON_FRAME(frame)
 # of what "safe" meant here; the sound itself is never simulated.
 VAR bar         = MENUBAR("menu")
 VAR file_menu   = MENU(bar, "File")
+VAR view_menu   = MENU(bar, "View")
 VAR audio_menu  = MENU(bar, "Audio")
 VAR midi_menu   = MENU(bar, "MIDI")
 VAR serial_menu = MENU(bar, "Serial")
+
+# one row per scene in this window, the current one ticked, picking one shows it -
+# the switch without the script writing a loop over WORKSPACE_NAMES()
+MENU_WORKSPACES(view_menu)
 
 MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("fm", [GET(pitch, "value"), GET(gain, "value"), GET(index, "value")]))
 MENU_ADD(file_menu, "Load bell", FUNC() -> SET(log, "lines", [STR(PRESET_LOAD("bell"))]))
@@ -196,3 +246,6 @@ MENU_ADD(audio_menu, "Mute", FUNC() -> PD_DSP(0))
 MENU_AUDIO_DIALOG(audio_menu)
 MENU_MIDI_DIALOG(midi_menu)
 MENU_ADD(serial_menu, "No serial link", FUNC() -> LOG("fm-synth declares no serial port"))
+
+# and the run opens on the front panel, because that is the page with Play on it
+WORKSPACE_SHOW("root")

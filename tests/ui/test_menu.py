@@ -946,6 +946,7 @@ def test_the_menu_module_names_exactly_these_bindings():
     from crude.bindings.menu import BINDINGS
     assert BINDINGS == (
         "MENUBAR", "MENU", "MENU_ADD", "MENU_CHECK", "MENU_SHOW", "MENU_HIDE",
+        "MENU_WORKSPACES",
         "MENU_AUDIO_DIALOG", "MENU_MIDI_DIALOG", "MENU_SERIAL_DIALOG",
     )
 
@@ -964,6 +965,7 @@ def test_every_menu_binding_is_registered_under_the_ui_area():
     ("MENU_CHECK", ("menu", "label", "on", "fn"), 1),
     ("MENU_SHOW", ("menu",), 0),
     ("MENU_HIDE", ("menu",), 0),
+    ("MENU_WORKSPACES", ("menu",), 0),
     ("MENU_AUDIO_DIALOG", ("menu", "title"), 1),
     ("MENU_MIDI_DIALOG", ("menu", "title"), 1),
     ("MENU_SERIAL_DIALOG", ("menu", "link", "title"), 1),

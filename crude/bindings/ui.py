@@ -61,12 +61,16 @@ from ..ui import (
     HIT,
     KINDS,
     PAINT,
+    ROOT_WORKSPACE,
     SCRIPT_EVENTS,
+    SHARED_WORKSPACE,
     TYPES,
     WIDGET_EVENTS,
     Canvas,
     UIError,
     Widget,
+    Workspace,
+    WorkspaceError,
     catalog_names,
     define,
     define_prop,
@@ -82,6 +86,10 @@ AREA = "ui"
 
 #: what ``GET``/``SET`` see on a widget handle, and the kind this module owns
 WIDGET_KIND = "widget"
+
+#: the kind a workspace handle is stamped with, so ``SET``/``GET`` keep answering
+#  for widgets and a scene is read and written only through the verbs below
+WORKSPACE_KIND = "workspace"
 
 #: the rows ``STYLE`` may write. A style is a role, a size, an icon or a hover
 #  word - never a colour and never a value: those belong to ``SET`` and the skin
@@ -931,6 +939,145 @@ def widget_has(ctx):
     return Number(1 if prop_exists(held, prop) else 0)
 
 
+# -- workspaces: named scenes in this window ----------------------------
+
+
+def _scene_handle(held: Workspace) -> HostHandle:
+    """Wrap a scene so a script can hold it, and name it in a report by its name."""
+    return HostHandle(held, kind=WORKSPACE_KIND, label=held.name)
+
+
+def _as_scene(ctx, window, arg_name: str) -> Workspace:
+    """The scene an argument names: a handle, a name, or a number.
+
+    All three because a script reaches for all three. ``WORKSPACE()`` hands back a
+    handle, ``WORKSPACE_SHOW("mixer")`` is what a person writes, and the value an
+    ``ON_CLICK`` argument became is whichever of those the script had been holding -
+    the same three shapes :func:`_as_widget` answers for, read against this window's
+    own list rather than against the tree.
+    """
+    value = ctx.get(arg_name)
+    if isinstance(value, Workspace):
+        return value
+    if isinstance(value, HostHandle) and isinstance(value.target, Workspace):
+        return value.target
+    try:
+        return window.workspaces.get(value_to_python(value))
+    except WorkspaceError as exc:
+        raise ctx.fail(f"{ctx.name}: {exc}") from None
+    except (TypeError, ValueError):
+        raise ctx.fail(
+            f"{ctx.name}: argument '{arg_name}' must be a workspace handle, a "
+            f"workspace name, or a number, got {type_name(value)}") from None
+
+
+@binding("WORKSPACE", ["name", "on_enter"], area=AREA, optional=2,
+         doc="WORKSPACE() reads the scene; with a name, make it and show it.")
+def workspace(ctx):
+    """``WORKSPACE("mixer")``: declare a scene and switch to it; ``WORKSPACE()`` reads.
+
+    One word for both questions because the answer to "which scene is this" and the
+    act of making it are the same piece of state, and a script that had to spell
+    ``WORKSPACE_CREATE`` and ``WORKSPACE_CURRENT`` would be writing a type system
+    rather than a front panel. With an ``on_enter`` the scene is one that rebuilds
+    itself - the function runs every time the scene is shown, and the scene stops
+    being carried across switches (:func:`WORKSPACE_KEEP` puts it back).
+    """
+    window = _window(ctx)
+    if not ctx.has("name"):
+        return String(window.workspaces.current_name)
+    name = ctx.as_string("name")
+    func = ctx.as_function("on_enter") if ctx.has("on_enter") else None
+    try:
+        held = window.workspaces.declare(name, on_enter=func)
+        window.workspaces.show(held.name)
+    except (WorkspaceError, UIError) as exc:
+        _fail(ctx, exc)
+    return _scene_handle(held)
+
+
+@binding("WORKSPACE_SHOW", ["workspace"], area=AREA,
+         doc="Show one scene by name or by number; the name now on screen.")
+def workspace_show(ctx):
+    """``WORKSPACE_SHOW("mixer")``: clear the window below the menu and put this scene in.
+
+    Every other scene's widgets leave the tree - carried or thrown away, which is
+    each one's :func:`WORKSPACE_KEEP` answer - and the target's arrive in the order
+    they left. A name the window does not have is refused with the list it does have.
+    """
+    window = _window(ctx)
+    held = _as_scene(ctx, window, "workspace")
+    try:
+        shown = window.workspaces.show(held.name)
+    except (WorkspaceError, UIError) as exc:
+        _fail(ctx, exc)
+    return String(shown)
+
+
+@binding("WORKSPACE_NAMES", [], area=AREA,
+         doc="Every scene this window has, in the order a menu should list them.")
+def workspace_names(ctx):
+    """``WORKSPACE_NAMES()``: the array, ``root`` first, always."""
+    window = _window(ctx)
+    return List([String(name) for name in window.workspaces.names()])
+
+
+@binding("WORKSPACE_INDEX", [], area=AREA,
+         doc="Which number the scene on screen is; WORKSPACE_SHOW takes it back.")
+def workspace_index(ctx):
+    """``WORKSPACE_INDEX()``: the current scene's position in ``WORKSPACE_NAMES()``."""
+    window = _window(ctx)
+    return Number(float(window.workspaces.index_of(window.workspaces.current_name)))
+
+
+@binding("WORKSPACE_ADD", ["workspace", "widget"], area=AREA,
+         doc="Put a widget into a scene, whether or not it is on screen.")
+def workspace_add(ctx):
+    """``WORKSPACE_ADD(mixer, w)``: parent a widget into a scene rather than a panel.
+
+    The scene's own panel is the container, which is why a scene can be built
+    before it is ever shown: ``NODE_ADD`` asks a *widget* to hold this one, and this
+    asks a *scene* to. The widget's owner is restated as the scene's, so a switch
+    takes it out of the window with the rest of them.
+    """
+    window = _window(ctx)
+    held = _as_scene(ctx, window, "workspace")
+    child = _as_widget(ctx, "widget")
+    if child.workspace == SHARED_WORKSPACE:
+        raise ctx.fail(
+            f"{ctx.name}: '{child.path()}' belongs to the window, not to a scene: "
+            "the menu bar and every popup cannot be moved into a workspace")
+    if held.name == ROOT_WORKSPACE:
+        # the entry script's scene *is* the window's root, so putting a widget into
+        # it is the same act as ``NODE_ADD(root, w)`` and says so in the same words
+        parent = window.root
+    else:
+        parent = window.workspaces.container(held)
+    try:
+        parent.add(child)
+        child.workspace = held.name
+    except UIError as exc:
+        _fail(ctx, exc)
+    return _handle(child)
+
+
+@binding("WORKSPACE_KEEP", ["workspace", "keep"], area=AREA,
+         doc="Carry a scene across switches (1) or rebuild it on entry (0).")
+def workspace_keep(ctx):
+    """``WORKSPACE_KEEP(mixer, 0)``: what leaving the scene costs.
+
+    ``1`` hides it by taking the subtree out of the tree, so every prop the person
+    set - a sampler's tuning, a mixer's faders - is there when the scene comes back.
+    ``0`` removes it, releasing every handler it registered, and the scene's
+    ``on_enter`` is the only thing that puts it back; a scene with no ``on_enter``
+    asked to rebuild arrives empty, which is what the script asked for.
+    """
+    window = _window(ctx)
+    held = _as_scene(ctx, window, "workspace")
+    held.keep = ctx.as_bool("keep")
+    return Number(1 if held.keep else 0)
+
+
 # -- the names this module registers ------------------------------------
 
 #: Every ``ui`` binding, in the order a report should read them: create,
@@ -950,4 +1097,6 @@ BINDINGS = (
     "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",
     "STYLE",
     "WIDGET_KINDS", "WIDGET_PROPS", "WIDGET_HAS",
+    "WORKSPACE", "WORKSPACE_SHOW", "WORKSPACE_NAMES", "WORKSPACE_INDEX",
+    "WORKSPACE_ADD", "WORKSPACE_KEEP",
 )

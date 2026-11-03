@@ -97,14 +97,22 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class UiConfig:
-    """``ui``: how the widgets look, and which art they are allowed to need."""
+    """``ui``: how the widgets look, which art they may need, and what scenes exist."""
 
     theme: str = "dark"
     icons: str = "generated"
     font: Optional[str] = None
+    #: the names of the scenes a project says it has, in the order a ``View`` menu
+    #: should list them. Advisory in the same way ``midi`` is: absent means the
+    #: window has only the entry script's scene, and a project that declares a scene
+    #: it never shows is a line in ``crude check`` rather than an error - the names
+    #: and the order are the only facts here, and the script still calls
+    #: ``WORKSPACE`` for each one.
+    workspaces: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"theme": self.theme, "icons": self.icons, "font": self.font}
+        return {"theme": self.theme, "icons": self.icons, "font": self.font,
+                "workspaces": list(self.workspaces)}
 
 
 @dataclass(frozen=True)
@@ -560,14 +568,54 @@ def _ui(data: Any, pointer: str) -> UiConfig:
     if data is None:
         return UiConfig()
     data = _mapping(data, pointer, "ui")
-    _no_extra(data, ("theme", "icons", "font"), pointer)
+    _no_extra(data, ("theme", "icons", "font", "workspaces"), pointer)
 
     font = data.get("font")
     return UiConfig(
         theme=_text(data.get("theme"), "dark", f"{pointer}.theme", "theme"),
         icons=_text(data.get("icons"), "generated", f"{pointer}.icons", "icons"),
         font=_path(font, None, f"{pointer}.font", "font") if font is not None else None,
+        workspaces=_workspaces(data.get("workspaces"), pointer),
     )
+
+
+def _workspaces(data: Any, pointer: str) -> Tuple[str, ...]:
+    """The scene names a project declares, in order: names and order only.
+
+    Advisory, exactly like the ``runtime`` rectangle: the entry script always makes
+    :data:`~crude.ui.workspace.ROOT_WORKSPACE` at index 0 and may rename its file
+    without changing that, so what is checked here is only that a listed name is a
+    name a script could actually show - no duplicate, no second ``root``, and not
+    :data:`~crude.ui.widget.SHARED_WORKSPACE`, which is the window's own stamp and
+    the one name a scene may never take.
+    """
+    if data is None:
+        return ()
+    from ..ui.widget import SHARED_WORKSPACE
+    from ..ui.workspace import ROOT_WORKSPACE
+
+    entries = _list(data, [], f"{pointer}.workspaces", "workspaces")
+    names: List[str] = []
+    seen: Dict[str, str] = {}
+    for index, item in enumerate(entries):
+        where = f"{pointer}.workspaces[{index}]"
+        said = _required_text(item, where,
+                              "a workspace needs a name the script can show")
+        if said == ROOT_WORKSPACE:
+            raise ManifestError(
+                f"'{said}' is the entry script's own scene, always at index 0; "
+                f"it is not declared here", where)
+        if said == SHARED_WORKSPACE:
+            raise ManifestError(
+                f"'{said}' is the window's own (its menu bar and every popup), "
+                f"not a scene's name", where)
+        if said in seen:
+            raise ManifestError(
+                f"workspace '{said}' is declared twice "
+                f"(first at {pointer}.workspaces[{seen[said]}])", where)
+        seen[said] = str(index)
+        names.append(said)
+    return tuple(names)
 
 
 def _audio(data: Any, pointer: str) -> AudioSection:

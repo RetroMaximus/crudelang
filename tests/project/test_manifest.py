@@ -289,6 +289,53 @@ def test_icons_may_name_a_folder_or_be_generated(root):
     assert manifest.ui.icons == "assets/icons"
 
 
+def test_no_workspaces_means_the_entry_scripts_scene_only(root):
+    manifest = build_manifest({"ui": {"theme": "dark"}}, root=str(root))
+
+    assert manifest.ui.workspaces == ()
+    assert manifest.ui.as_dict()["workspaces"] == []
+
+
+def test_the_declared_workspaces_are_names_in_order(root):
+    manifest = build_manifest({"ui": {"workspaces": ["sampler", "sequencer",
+                                                      "mixer", "config"]}},
+                              root=str(root))
+
+    assert manifest.ui.workspaces == ("sampler", "sequencer", "mixer", "config")
+    assert manifest.ui.as_dict()["workspaces"] == ["sampler", "sequencer",
+                                                   "mixer", "config"]
+
+
+def test_root_is_not_declared_again(error):
+    error({"ui": {"workspaces": ["mixer", "root"]}},
+          contains="always at index 0")
+
+
+def test_shared_is_the_windows_own_name(error):
+    error({"ui": {"workspaces": ["shared"]}}, contains="not a scene's name")
+
+
+def test_the_same_scene_twice_is_ambiguous(error):
+    caught = error({"ui": {"workspaces": ["mixer", "mixer"]}},
+                   contains="declared twice")
+
+    assert caught.pointer == "ui.workspaces[1]"
+    assert "first at ui.workspaces[0]" in str(caught)
+
+
+def test_a_workspace_needs_a_name(error):
+    error({"ui": {"workspaces": [""]}}, contains="needs a name")
+    error({"ui": {"workspaces": [7]}}, contains="needs a string")
+
+
+def test_workspaces_must_be_an_array(error):
+    error({"ui": {"workspaces": {"mixer": 1}}}, contains="must be a JSON array")
+
+
+def test_an_unknown_ui_key_is_still_a_typo(error):
+    error({"ui": {"workspeaces": ["mixer"]}}, contains="unexpected key")
+
+
 # --------------------------------------------------------------------------
 # audio
 # --------------------------------------------------------------------------

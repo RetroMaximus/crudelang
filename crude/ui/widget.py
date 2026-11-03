@@ -55,8 +55,9 @@ from .props import State, digest, get_kind, pd_arguments, pd_object_for
 from .skin import ROLES, Skin, as_role
 
 __all__ = ["Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
-           "CONTENT_KIND", "CONTENT_SUFFIX", "format_value",
-           "DEFAULT_DECIMALS", "root_panel", "top_at"]
+           "CONTENT_KIND", "CONTENT_SUFFIX", "SHARED_WORKSPACE",
+           "NO_WORKSPACE", "format_value", "DEFAULT_DECIMALS",
+           "root_panel", "top_at"]
 
 #: the four rows only the pointer and the keyboard may write
 POINTER = ("hovered", "pressed", "focused", "selected")
@@ -79,6 +80,19 @@ CONTENT_KIND = "scroll"
 #: the inner panel's own name, hung off whichever name the script gave the viewport
 #: - so ``find("list#rows")`` answers and a report can tell the two apart.
 CONTENT_SUFFIX = "#rows"
+
+#: the owner a widget has when no workspace may hide it: the menu bar, a menu's
+#: popup and a dialog's popup are all in the window rather than in a scene, and
+#: :mod:`crude.ui.workspace` switches scenes by owner name, so anything that has to
+#: survive a switch says this one. A reserved word: a scene cannot be named it, and
+#: it is never in :meth:`~crude.ui.workspace.Workspaces.names`.
+SHARED_WORKSPACE = "shared"
+
+#: the owner of a widget nobody has put anywhere yet, which is the value a fresh
+#  :class:`Widget` holds and the one :meth:`~crude.ui.context.UIContext.add` replaces
+#  with the current scene's name - "the first time a widget is added" said as a
+#  comparison rather than as a counter.
+NO_WORKSPACE = ""
 
 #: a widget's ``size`` prop is a skin scale, and building a
 #: :class:`~crude.ui.skin.Skin` resolves every role in it - so the five sizes a
@@ -173,7 +187,7 @@ class Widget:
     """
 
     __slots__ = ("kind", "name", "uid", "parent", "on_change", "on_event",
-                 "on_paint",
+                 "on_paint", "workspace",
                  "x", "y", "width", "height",
                  "_state", "_children", "_screen", "_clip", "_origin",
                  "_inset", "_skin", "_from", "_changed", "_layout", "_grid",
@@ -208,6 +222,14 @@ class Widget:
         self._state: Dict[str, State] = dict(self.kind.states(values))
         self.parent: Optional[Widget] = None
         self._children: List[Widget] = []
+        #: which scene this widget was put into, by name. ``""`` is "nowhere yet",
+        #  which :meth:`~crude.ui.context.UIContext.add` stamps with the current
+        #  scene's name, and :data:`SHARED_WORKSPACE` is "the window itself" - the
+        #  menu bar and every popup - which is what lets a workspace switch clear
+        #  the scene without taking the menu down with it. Stamped once, by that
+        #  add, and never by a tree walk: a child put inside a panel already in a
+        #  scene belongs to that scene through the panel, not through this row.
+        self.workspace = NO_WORKSPACE
         # the resolved geometry, as a detached widget would resolve it: its own
         # box is its screen box, its children start at its top-left, and nothing
         # clips it. A sync with a skin puts the padding into ``_inset`` and the

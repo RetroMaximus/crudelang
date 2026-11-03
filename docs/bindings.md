@@ -289,6 +289,7 @@ ordinary widgets, so a menu is a composition the tests can drive with no GPU.
 MENUBAR([name])                    MENU(bar, title)
 MENU_ADD(menu, label, fn)          MENU_CHECK(menu, label, [on], fn)
 MENU_SHOW(menu)                    MENU_HIDE(menu)
+MENU_WORKSPACES(menu)              WORKSPACE_SHOW(name_or_index)
 MENU_AUDIO_DIALOG(menu[, title])   MENU_MIDI_DIALOG(menu[, title])
 MENU_SERIAL_DIALOG(menu, link[, title])
 ```
@@ -318,6 +319,60 @@ menu and runs headless; with no runtime the list shows one disabled
 Each page is sized from the window it is opened in, keeps its `Apply` row at the
 bottom and scrolls the rest (`widgets.md`, "Menus and dialogs"), so a small
 window shows a whole dialog rather than a cut-off one.
+
+`MENU_WORKSPACES(menu)` makes a menu out of the scenes the window has: one row
+per workspace, the current one ticked, each row switching to its scene (see
+below). The rows are re-read every time the popup opens, so a scene declared
+after the menu was built is on the list without the script rebuilding it by
+hand.
+
+## Workspaces
+
+A workspace is a named scene inside the one window - a subtree of the same
+widget tree, not a second window and not a second interpreter. The entry
+script's scene is always `"root"` at index 0, and its panel is the window's
+root, so a script that never mentions a workspace is exactly what it always
+was. The menu bar belongs to the window rather than to a scene, and every
+scene fills the window *below* the bar, which is what a switch clears.
+
+```
+WORKSPACE()                        WORKSPACE(name[, on_enter])
+WORKSPACE_SHOW(name_or_index)      WORKSPACE_NAMES()
+WORKSPACE_INDEX()                  WORKSPACE_ADD(workspace, widget)
+WORKSPACE_KEEP(workspace, keep)
+```
+
+`WORKSPACE()` answers with the current scene's name; `WORKSPACE("mixer")`
+makes that scene and shows it, and `WORKSPACE("mixer", build_mixer)` makes one
+that runs `build_mixer` every time it is shown instead of being carried. The
+handle it returns names the scene in the other four verbs, and so does its name
+or its number, whichever a script happens to be holding.
+
+`WORKSPACE_SHOW("mixer")` and `WORKSPACE_SHOW(2)` are the same gesture: the
+scenes that are not the target leave the tree, the target's arrive in the order
+they left, and an unknown name or number is refused with the list the window
+does have. `WORKSPACE_NAMES()` is that list (`root` first, always) and
+`WORKSPACE_INDEX()` the number of the one on screen, so a `View` menu and a
+loop over the array are the same two calls.
+
+`WORKSPACE_ADD(mixer, w)` parents a widget into a scene whether or not that
+scene is on screen, which is how a project builds four pages and shows one.
+`NODE_ADD(parent, child)` still works for the current scene, and a widget added
+by either route is stamped with the scene it was added to: that stamp is all
+ownership is, and a widget whose stamp is the window's own (the menu bar, a
+popup) cannot be moved into a scene at all.
+
+`WORKSPACE_KEEP(mixer, 1)` is the carry: leaving the scene takes its subtree out
+of the tree with every prop and every `ON_CLICK` still on it, so a sampler's
+settings survive a jump to the mixer and come back unchanged - and a handler
+registered in a hidden scene cannot fire, because a widget with no parent is a
+widget no hit test can find. `WORKSPACE_KEEP(mixer, 0)` is the rebuild: leaving
+removes the subtree and releases its handlers, and the scene's `on_enter` is
+what puts it back. Declaring an `on_enter` says "rebuild me" by itself.
+
+The `ui.workspaces` manifest key (`manifest.md`) reserves the names and the
+order before the script runs; `root` is index 0 whatever the list says, and a
+script that declares a reserved scene fills it in rather than colliding with it.
 
 ## Common handle calls
 

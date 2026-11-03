@@ -70,7 +70,8 @@ is allowed to ignore; a headless run has no vsync to talk about.
 ## `ui`
 
 ```
-{ "theme": "dark", "icons": "generated", "font": null }
+{ "theme": "dark", "icons": "generated", "font": null,
+  "workspaces": ["sampler", "sequencer", "mixer", "config"] }
 ```
 
 `theme` names a skin in :mod:`crude.ui.skin`. `icons` is `"generated"` by
@@ -78,6 +79,17 @@ default, which means the built-in glyph set draws every icon; a project
 that ships its own icons can point this at a folder. `font` is an optional
 project-relative path to a bitmap or TTF the widget renderer uses; with
 `null` the built-in default is loaded from the glyph atlas.
+
+`workspaces` is optional and names only: the scenes a project has, in the
+order a `View` menu should list them and `WORKSPACE_INDEX()` should count.
+`root` is always index 0 and is not declared here (an entry script's scene is
+the window's own root); a duplicate, or the reserved `shared` - the stamp the
+menu bar and every popup carry - is a manifest error. The list is advisory in
+the same way `midi` is: the runtime reserves those names on the context before
+the script runs, so `WORKSPACE("mixer")` fills in the reserved scene instead of
+colliding with it, and a project that names a scene it never draws simply has an
+empty page. Absent means only `root`, which is every example that does not
+mention workspaces.
 
 ## `audio`
 

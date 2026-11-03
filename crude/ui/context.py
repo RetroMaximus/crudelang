@@ -54,7 +54,8 @@ from .layout import describe_layout, resolve
 from .null_renderer import NullRenderer
 from .scroll import content_of, restack, travel_of
 from .skin import Skin
-from .widget import Widget, root_panel, top_at
+from .widget import SHARED_WORKSPACE, Widget, root_panel, top_at
+from .workspace import Workspaces
 
 __all__ = ["UIContext", "UIContextError", "FrameReport", "DEFAULT_UI_SIZE",
            "BUDGET_MS"]
@@ -195,6 +196,12 @@ class UIContext:
         #  and a theme change both want to say it from the window rather than from
         #  the handler table
         self.paints = self.handlers.paints
+        #: the named scenes this window can show, with the entry script's -
+        #  :data:`~crude.ui.workspace.ROOT_WORKSPACE` - as the only one until a
+        #  script declares another. Held here because a switch moves subtrees of
+        #  *this* tree and nothing else: it is not a second window and not a
+        #  second interpreter.
+        self.workspaces = Workspaces(self)
         #: the frame counters a report and a log read
         self.frames = 0
         self.events = 0
@@ -508,10 +515,26 @@ class UIContext:
 
     # -- the tree ---------------------------------------------------------
     def add(self, held: Any) -> Widget:
-        """Put a widget in the window's root, at the top of the stack."""
-        found = self.root.add(self._one(held))
+        """Put a widget in the window, at the top of the stack it belongs to.
+
+        Two questions are answered by the one row :attr:`Widget.workspace` holds.
+        Where does it go: something stamped
+        :data:`~crude.ui.widget.SHARED_WORKSPACE` - the menu bar, a menu's popup, a
+        settings dialog - is the window's own and goes at the root, because a scene
+        switch must not hide the menu it is reached from; anything else goes into the
+        current scene's panel, which is the window's root until a second scene is
+        declared. Whose is it: the first add stamps the current scene's name, so a
+        later switch can find this widget again without the script saying it twice.
+        """
+        found = self._one(held)
+        if found.workspace == SHARED_WORKSPACE:
+            target = self.root
+        else:
+            target = self.workspaces.container()
+            self.workspaces.claim(found)
+        added = target.add(found)
         self.router.root = self.root
-        return found
+        return added
 
     def remove(self, held: Any) -> Widget:
         """Take a widget out of the tree, and out of the pointer's reach.

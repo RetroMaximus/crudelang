@@ -129,6 +129,8 @@ _EXPECTED_BINDINGS = (
     "P_GLYPH", "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",
     "STYLE",
     "WIDGET_KINDS", "WIDGET_PROPS", "WIDGET_HAS",
+    "WORKSPACE", "WORKSPACE_SHOW", "WORKSPACE_NAMES", "WORKSPACE_INDEX",
+    "WORKSPACE_ADD", "WORKSPACE_KEEP",
 )
 
 
@@ -194,6 +196,12 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("WIDGET_KINDS", (), 0),
     ("WIDGET_PROPS", ("kind",), 0),
     ("WIDGET_HAS", ("widget", "prop"), 0),
+    ("WORKSPACE", ("name", "on_enter"), 2),
+    ("WORKSPACE_SHOW", ("workspace",), 0),
+    ("WORKSPACE_NAMES", (), 0),
+    ("WORKSPACE_INDEX", (), 0),
+    ("WORKSPACE_ADD", ("workspace", "widget"), 0),
+    ("WORKSPACE_KEEP", ("workspace", "keep"), 0),
 ])
 def test_every_ui_binding_declares_its_arguments(name, args, optional):
     entry = REGISTRY[name]

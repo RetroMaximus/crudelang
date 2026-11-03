@@ -52,9 +52,10 @@ from typing import Any, Callable, List, Optional, Tuple
 from .handlers import event_name
 from .layout import anchor, grid, hstack, pack, pad
 from .scroll import measure, reconcile, scroll_by
-from .widget import Widget
+from .widget import SHARED_WORKSPACE, Widget
 
-__all__ = ["MenuBar", "Menu", "MenuItem", "MenuDialog"]
+__all__ = ["MenuBar", "Menu", "MenuItem", "MenuDialog", "BAR_HEIGHT",
+           "ITEM_HEIGHT"]
 
 #: the height of the bar strip and of the popup rows, in logical pixels - fixed
 #  numbers because a menu has to be the same size whether or not a layout pass
@@ -141,6 +142,12 @@ class MenuBar:
     Built lazily-visible: the bar panel itself is always shown, but a popup only
     overlaps the rest of the window while it is open, and opening one closes
     whichever was open before it - so at most one menu's items are ever on screen.
+
+    The bar is not part of any workspace: it is stamped
+    :data:`~crude.ui.widget.SHARED_WORKSPACE` before it is added, so switching scenes
+    leaves the menu a person used to switch with on screen, and tells the window's
+    :class:`~crude.ui.workspace.Workspaces` where the bar is so every scene's panel
+    starts at its bottom edge rather than under it.
     """
 
     def __init__(self, ctx: Any, name: str = "menu") -> None:
@@ -152,6 +159,7 @@ class MenuBar:
         self.open: Optional[Menu] = None
         #: the strip the titles live on, placed at the top of the window
         self.panel = Widget("panel", {"label": self.name}, name=self.name)
+        self.panel.workspace = SHARED_WORKSPACE
         ctx.add(self.panel)
         # the bar places its titles by hand at full height, so the panel's own
         # skin padding has to go: a child placed at (0,0) with the strip's whole
@@ -162,6 +170,11 @@ class MenuBar:
         self.panel.place(0.0, 0.0, _title_width(self.name), BAR_HEIGHT)
         # the next title's left edge, in bar-relative pixels
         self._cursor = 0.0
+        # every scene already on screen is re-glued to this bar's bottom edge, so a
+        # script that wrote WORKSPACE before MENUBAR still gets a scene below it
+        workspaces = getattr(ctx, "workspaces", None)
+        if workspaces is not None:
+            workspaces.attach_bar(self.panel)
 
     def menu(self, title: str, name: str = "") -> "Menu":
         """Add one titled menu to the bar; the :class:`Menu` it made."""
@@ -182,6 +195,14 @@ class MenuBar:
         for held in self.menus:
             if held.is_open():
                 held.hide()
+
+    def menu_named(self, name: Any) -> Optional["Menu"]:
+        """One of this bar's menus by the name the script gave it, or ``None``."""
+        said = str(name or "")
+        for held in self.menus:
+            if held.name == said or held.title == said:
+                return held
+        return None
 
     def __str__(self) -> str:
         titles = ", ".join(menu.title for menu in self.menus) or "empty"
@@ -218,9 +239,15 @@ class Menu:
         # the popup is a child of the window's root, not of the bar, so it can
         # overlap the project's widgets; it starts hidden and raised when shown.
         # Its rows are placed by hand inside POPUP_PAD, so the panel's own
-        # padding goes for the same reason the bar's went.
+        # padding goes for the same reason the bar's went. It is the window's
+        # rather than a scene's, so a workspace switch cannot hide the menu that is
+        # open while it runs.
         self.popup = Widget("panel", {"label": self.title},
                             name=f"{self.name}#popup")
+        self.popup.workspace = SHARED_WORKSPACE
+        #: the callables run just before this popup is shown, so a menu whose rows
+        #  are the window's scenes can re-ask which one is on screen
+        self.opening: List[Callable[["Menu"], Any]] = []
         self.ctx.add(self.popup)
         pad(self.popup, 0.0)
         self.popup.place(self.button.x, BAR_HEIGHT, width, POPUP_PAD)
@@ -240,8 +267,19 @@ class Menu:
 
     # -- open and close ---------------------------------------------------
     def show(self) -> "Menu":
-        """Raise this popup and put every other one away."""
+        """Raise this popup and put every other one away.
+
+        The rows are rebuilt by whoever registered an ``opening`` listener first: a
+        ``MENU_WORKSPACES`` row list has to say which scene is current, and the only
+        moment that question has a useful answer is the moment the person opens the
+        menu.
+        """
         self.bar.close_others(self)
+        for said in list(self.opening):
+            try:
+                said(self)
+            except Exception:  # a row list that will not rebuild is shown as it is
+                pass
         self.bar.open = self
         self.popup.raise_to_top()
         self.popup.set("visible", True)
@@ -270,6 +308,37 @@ class Menu:
         self.items.append(held)
         self._measure()
         return held
+
+    def remove_item(self, item: Any) -> bool:
+        """Take one row out of the popup; whether it was in here.
+
+        The other half of :meth:`add_item`, and the half a rebuilt row list needs:
+        a menu whose rows are the window's workspaces is asked to change them every
+        time it opens, and a popup that only ever grew would list a scene that no
+        longer exists for as long as the window does.
+        """
+        held = item if isinstance(item, MenuItem) else None
+        if held is None:
+            index = item
+            try:
+                held = self.items[int(index)]
+            except (TypeError, ValueError, IndexError):
+                return False
+        if held not in self.items:
+            return False
+        self.items.remove(held)
+        self.popup.remove(held.button)
+        self._measure()
+        return True
+
+    def clear_items(self) -> int:
+        """Take every row out; how many went, for a menu that is about to be refilled."""
+        gone = 0
+        while self.items:
+            if not self.remove_item(self.items[0]):
+                break
+            gone += 1
+        return gone
 
     def add_dialog(self, label: str, fields, *, provider=None, on_apply=None,
                    buttons=None, on_cancel=None, name: str = "") -> "MenuDialog":
@@ -454,6 +523,10 @@ class MenuDialog:
         # a panel's own label would float in the vertical middle of the box
         self.popup = Widget("panel", {"label": ""},
                             name=str(name or f"{menu.name}#dialog"))
+        # a settings page is the window's, not the scene's: it is opened from the
+        # menu bar, which no switch hides, and a page that belonged to a scene would
+        # be taken off screen by the very gesture it might exist to configure
+        self.popup.workspace = SHARED_WORKSPACE
         self.ctx.add(self.popup)
         # rows are placed by hand inside POPUP_PAD - the panel's own padding
         # would clip them the same way it clips a menu popup's

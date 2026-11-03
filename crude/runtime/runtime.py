@@ -168,6 +168,7 @@ class Runtime:
         # and the plan's parity line says the same script runs in every mode
         if self.ui is None:
             self.ui = self._build_ui()
+        self._seed_scenes(self.ui)
         if project is not None:
             try:
                 project.runtime = self
@@ -261,6 +262,33 @@ class Runtime:
         height = getattr(runtime, "height", None)
         return {} if not width or not height else {
             "width": float(width), "height": float(height)}
+
+    def _scenes(self) -> Tuple[str, ...]:
+        """The scene names ``ui.workspaces`` said, or none: names and order only."""
+        manifest = self._project_field("manifest")
+        ui = getattr(manifest, "ui", None)
+        return tuple(getattr(ui, "workspaces", None) or ())
+
+    def _seed_scenes(self, ui: Any) -> None:
+        """Reserve the manifest's scene names on the context, before the script runs.
+
+        Advisory exactly like ``midi`` is: a project that lists scenes gets those
+        numbers held from frame one, so a ``View`` menu and a script that declares
+        them in another order still agree, and a project that lists a scene it never
+        draws has an empty page rather than a load failure. A host UI that is not a
+        real context has no ``workspaces`` to ask, and is left alone.
+        """
+        names = self._scenes()
+        if not names:
+            return
+        seed = getattr(getattr(ui, "workspaces", None), "seed", None)
+        if not callable(seed):
+            return
+        try:
+            seed(names)
+        except Exception as exc:  # a name the window cannot take: said, not fatal
+            self.notes.append(f"workspace declaration skipped: {exc}")
+            self.log(self.notes[-1])
 
     # -- the audio side of a frame ----------------------------------------
     def blocks_for_frame(self) -> int:
