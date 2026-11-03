@@ -32,12 +32,13 @@ from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       prop_names, props_of, registered_names, reset, settle,
                       settled, states, UIError, value_of)
 
-#: the twenty-two kinds the plan's widget list adds up to: the twelve faces and
+#: the twenty-three kinds the plan's widget list adds up to: the twelve faces and
 #  controls, plus the nine synth widgets and canvases S9 put on the same
-#  conventions, plus the viewport the settings dialog grew into a kind
+#  conventions, plus the viewport the settings dialog grew into a kind, plus the
+#  section a page is built out of
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "plot", "logview", "scroll",
+           "waveform", "spectrum", "plot", "logview", "scroll", "group",
            "adsr", "curve", "xy",
            "keybed", "preset_bar")
 
@@ -1035,9 +1036,10 @@ def test_dumping_one_kind_and_the_whole_table_are_two_different_questions(bpm):
 def test_a_kind_and_a_prop_can_say_what_they_are_when_a_log_needs_to_say_it(bpm):
     assert str(bpm) == ("Kind(bpm_slider, 30 props, from slider, "
                         "emits [hslider], defined by script)")
-    # the five grid rows are in a panel's count: three the layout pass measures,
-    # ``dockable`` the script writes, ``docking`` the frame writes
-    assert str(get_kind("panel")) == "Kind(panel, 27 props, emits [cnv])"
+    # the five grid rows are in a panel's count (three measured by the pass,
+    # ``dockable`` written by a script, ``docking`` by the frame) and so is
+    # ``accordion``, the rule a panel holds over the groups inside it
+    assert str(get_kind("panel")) == "Kind(panel, 28 props, emits [cnv])"
     assert repr(get_kind("slider")) == "<Kind slider>"
     assert str(get_kind("slider").get("size")).startswith(
         "slider.size: string = 'md'")

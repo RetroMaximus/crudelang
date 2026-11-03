@@ -34,10 +34,12 @@ from crude.ui import (BEHAVIOURS, Handlers, InputRouter, MODS, Skin, Widget,
 
 #: the kinds the table answers a gesture for: the eight faces and controls,
 #: plus the four synth widgets a pointer can actually edit, plus the viewport -
-#: which edits no value of its own and moves its content instead
+#: which edits no value of its own and moves its content instead - and the group,
+#: which edits no value either and answers a fold on its mark and a pickup on its
+#: header
 INTERACTIVE = ("slider", "vslider", "knob", "number", "toggle", "button",
                "radio", "dropdown", "adsr", "curve", "xy", "keybed",
-               "preset_bar", "scroll")
+               "preset_bar", "scroll", "group")
 
 #: the six it deliberately leaves still: the four that always were, and the two
 #: displays whose every pixel is whatever a script last pushed into ``data``

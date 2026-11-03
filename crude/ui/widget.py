@@ -51,13 +51,16 @@ from .behaviour import install_behaviour
 from .faces import SIDES, face_for, placed_text, placement
 from .geometry import (Point, Rect, TEXT_HEIGHT, clip_overlap, snap_box,
                        text_bounds)
+from .group import (GROUP_BODY_SUFFIX, GROUP_HEADER_SUFFIX, GROUP_KIND,
+                    HEADER_HEIGHT)
 from .props import State, digest, get_kind, pd_arguments, pd_object_for
 from .skin import ROLES, Skin, as_role
 
 __all__ = ["Widget", "Panel", "WidgetError", "POINTER", "CONTAINER_KIND",
-           "CONTENT_KIND", "CONTENT_SUFFIX", "SHARED_WORKSPACE",
-           "NO_WORKSPACE", "format_value", "DEFAULT_DECIMALS",
-           "root_panel", "top_at"]
+           "CONTENT_KIND", "CONTENT_SUFFIX", "GROUP_KIND",
+           "GROUP_HEADER_SUFFIX", "GROUP_BODY_SUFFIX", "CONTENT_SUFFIXES",
+           "SHARED_WORKSPACE", "NO_WORKSPACE", "format_value",
+           "DEFAULT_DECIMALS", "root_panel", "top_at"]
 
 #: the four rows only the pointer and the keyboard may write
 POINTER = ("hovered", "pressed", "focused", "selected")
@@ -80,6 +83,26 @@ CONTENT_KIND = "scroll"
 #: the inner panel's own name, hung off whichever name the script gave the viewport
 #: - so ``find("list#rows")`` answers and a report can tell the two apart.
 CONTENT_SUFFIX = "#rows"
+
+#: the kind whose children go into a body panel of its own, under a header it draws
+#  itself, and the two panels it is built out of - :data:`GROUP_KIND`,
+#  :data:`GROUP_HEADER_SUFFIX` and :data:`GROUP_BODY_SUFFIX`, imported above from
+#  :mod:`crude.ui.group`, the module that answers questions about that structure,
+#  and re-exported here because the tree is where a reader looks for a kind's name
+#  and because the routing below has to compare against them. The routing is the
+#  same mechanism a viewport uses, one content child handed every child the widget
+#  is given, which is why a group is a kind and not a class:
+#  ``WIDGET_DEFINE("section", "group")`` gets the header, the body and the fold
+#  without anybody writing a subclass.
+
+#: which suffix marks the content child of which kind. A table rather than one
+#  constant, because the two questions a container asks - "do my children go
+#  somewhere else" and "which of my children is that place" - have one answer per
+#  kind, and a chain walk is what makes a variant of either inherit it.
+CONTENT_SUFFIXES: Dict[str, str] = {
+    CONTENT_KIND: CONTENT_SUFFIX,
+    GROUP_KIND: GROUP_BODY_SUFFIX,
+}
 
 #: the owner a widget has when no workspace may hide it: the menu bar, a menu's
 #: popup and a dialog's popup are all in the window rather than in a scene, and
@@ -738,7 +761,9 @@ class Widget:
 
         A viewport is the one container that does not keep what it is handed: its
         children go to its :attr:`content_child`, because the thing that has to
-        move when the wheel turns is the content and not the window onto it.
+        move when the wheel turns is the content and not the window onto it. A
+        :data:`GROUP_KIND` widget answers the same way for the same reason - the
+        children belong under the header, not over it.
         """
         if child is self:
             raise WidgetError("a widget cannot be inside itself")
@@ -772,24 +797,56 @@ class Widget:
 
     @property
     def content_child(self) -> Optional["Widget"]:
-        """Where this container's children actually go: itself, unless a viewport.
+        """Where this container's children actually go: itself, unless it has a body.
 
-        A :data:`CONTENT_KIND` widget builds one inner panel the first time it is
-        asked to hold something, and every later ``add`` walks through it, so a
-        scroll area is a container with a content box that can be slid rather than
-        a private convention inside whoever made it. The inner panel is a real
-        child: :meth:`walk`, the clip a panel owes its children, hit testing and a
-        removal all keep answering for it, and a script that wants the rows themselves
-        can hold ``widget.content_child`` rather than guess at a name.
+        Two kinds answer that way, through :data:`CONTENT_SUFFIXES`, and both for
+        the same reason: the thing the widget is asked to hold is not what the
+        widget itself is drawn to be. A :data:`CONTENT_KIND` builds one inner panel
+        so the content can be slid without moving the window onto it; a
+        :data:`GROUP_KIND` builds a header and a body so a child can never be
+        placed over the header a script was not given. Either panel is built the
+        first time it is needed and is a real child from then on: :meth:`walk`, the
+        clip a panel owes its children, hit testing and a removal all keep
+        answering for it, and a caller that wants the rows themselves can hold
+        ``widget.content_child`` rather than guess at a name.
         """
-        if CONTENT_KIND not in self.kind.chain():
+        suffix = self._content_suffix
+        if suffix is None:
             return None
         for kid in self._children:
-            if kid.name.endswith(CONTENT_SUFFIX) and "panel" in kid.kind.chain():
+            if kid.name.endswith(suffix) and "panel" in kid.kind.chain():
                 return kid
         return self._build_content()
 
+    @property
+    def _content_suffix(self) -> Optional[str]:
+        """The name the kind's own content child ends with, or ``None``.
+
+        Read off the inheritance chain rather than the kind's name, so a script's
+        ``WIDGET_DEFINE("section", "group")`` routes its children into a body the
+        same way the catalog kind does - which is the plan's rule that a variant
+        inherits the structure it inherits the props from.
+        """
+        for name in self.kind.chain():
+            found = CONTENT_SUFFIXES.get(name)
+            if found is not None:
+                return found
+        return None
+
     def _build_content(self) -> "Widget":
+        """Make the panels the kind needs and answer the one children go into.
+
+        Dispatched on the suffix :attr:`_content_suffix` resolved rather than on a
+        position in the chain, because a chain holds only the names this widget
+        inherits: asking where ``"group"`` sits in a scroll's chain - or where
+        ``"scroll"`` sits in a group's - is a question about a name that is not
+        there, and the answer is an error, not a comparison.
+        """
+        if self._content_suffix == GROUP_BODY_SUFFIX:
+            return self._build_group()
+        return self._build_viewport()
+
+    def _build_viewport(self) -> "Widget":
         """Make a viewport's inner panel, placed to be slid and to keep its width.
 
         Built here rather than through :meth:`add` because ``add`` is the function
@@ -831,6 +888,61 @@ class Widget:
                     max(0.0, self.content_box()[2]), 0.0)
         self.remeasure()
         return inner
+
+    def _build_group(self) -> "Widget":
+        """Make a group's header and its body, and answer the body.
+
+        Both panels are built here and appended directly for the same reason the
+        viewport's content is: they are what :meth:`add` is about to route children
+        into, and a child created inside the container that routes would ask the
+        question it exists to answer.
+
+        The header is a real panel that is never drawn as one. ``visible`` is off
+        and its role has no face, because the group's own face paints the plate,
+        the title and the chevron - and :meth:`hit` skips an invisible child, so a
+        press in the header band is claimed by the *group*, which is the one widget
+        with a behaviour for it. That is why there is no event forwarding here: the
+        header exists so the fold has a place on the screen to be tested against,
+        not so it can be clicked on its own account.
+
+        Every edge is glued rather than placed. The group's own box is decided by
+        whatever the script or a stack gave it, folding is decided before that, and
+        an anchor pass run last is the only way the two panels are certain to be
+        measured against this frame's answer instead of last frame's.
+        """
+        from .layout import anchor, pack, pad as pad_children
+
+        stem = self.name or "group"
+        head = Widget("panel", {"label": "", "visible": False, "role": "caption"},
+                      name=f"{stem}{GROUP_HEADER_SUFFIX}")
+        head.parent = self
+        self._children.append(head)
+        body = Widget("panel", {"label": "", "role": "caption"},
+                      name=f"{stem}{GROUP_BODY_SUFFIX}")
+        body.parent = self
+        self._children.append(body)
+        # the group's own padding is the inset its content box already carries, so
+        # neither panel pads what it is given: a script that wants room inside the
+        # body says so on the body, which is a real panel it can name
+        pad_children(head, 0.0)
+        pad_children(body, 0.0)
+        pack(head, "fixed", "fixed")
+        pack(body, "fixed", "fixed")
+        head.place(0.0, 0.0, max(0.0, self.content_box()[2]), HEADER_HEIGHT)
+        anchor(head, "left")
+        anchor(head, "right")
+        anchor(head, "top")
+        # the body is the space between the header's bottom edge and the group's
+        # own, which folding collapses to nothing without this module doing any
+        # arithmetic about it: a folded group is a header-tall group, and two edges
+        # glued to a header-tall group leave a body of no height
+        body.place(0.0, HEADER_HEIGHT, max(0.0, self.content_box()[2]), 0.0)
+        anchor(body, "left")
+        anchor(body, "right")
+        anchor(body, "top", head, "bottom")
+        anchor(body, "bottom")
+        self.remeasure()
+        return body
 
     #: ``PANEL``-and-``NODE_ADD`` spell it as a method too, for a caller that has
     #  the parent in hand rather than the child

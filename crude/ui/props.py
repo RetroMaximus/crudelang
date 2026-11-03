@@ -796,10 +796,43 @@ _GRID: Dict[str, Prop] = {
                     "when a dockable panel draws its cells.", ro=True),
 }
 
+#: the rows a group answers with: the header's two words and the two facts the
+#  pass measures a box out of. ``title`` is the header's own word and ``label``
+#  stays the common row it is, so a script that renames a group through either
+#  is not ignored - the face reads ``title or label``, which is why both exist.
+#  ``cell`` and ``order`` are read-only in the same family as a viewport's
+#  ``travel``: the pass that arranged the panel writes them and a script that
+#  wrote one would be overruled by the next frame without being told.
+#  ``accordion`` is *not* a group's own row - it belongs to the panel holding the
+#  groups, because "opening one closes its siblings" is a statement about the
+#  siblings, and a nested group's parent is an ordinary body panel.
+_GROUP: Dict[str, Prop] = {
+    "title": _row("title", "string", "",
+                  "The word drawn in the header; empty shows the widget's own "
+                  "label instead."),
+    "folded": _row("folded", "bool", False,
+                   "Whether only the header is shown. The pass gives the group "
+                   "its header's height and hides the body."),
+    "foldable": _row("foldable", "bool", True,
+                     "Whether the header offers the fold at all: off draws no "
+                     "chevron and a click on the header folds nothing."),
+    "accordion": _row("accordion", "bool", False,
+                      "On a panel that holds groups: opening one folds the "
+                      "others, so the panel is always one section tall."),
+    "cell": _row("cell", "number", -1.0,
+                 "Which cell of its panel's grid this group was arranged into, "
+                 "counted from 0; -1 when the panel is not a measured grid.",
+                 ro=True),
+    "order": _row("order", "number", 0.0,
+                  "Where this group stands among its siblings, which is the "
+                  "order a stack or a grid arranges them in.",
+                  rng=(0.0, None), ro=True),
+}
+
 #: every row a kind may ask for by name, in one place, so asking for a row that
 #  is not there is an error that names the rows that are
 _TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL,
-                              **_GRID}
+                              **_GRID, **_GROUP}
 
 #: the rows a *pass* measures rather than the pointer writes: the two a viewport
 #  answers with and the four a panel's cells are counted in. They are read off the
@@ -809,7 +842,7 @@ _TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL,
 #  together are every row in the catalog a ``SET`` refuses - which is proved, per
 #  kind, by :mod:`tests.ui.test_widget`.
 MEASURED: Tuple[str, ...] = tuple(
-    name for group in (_SCROLL, _GRID)
+    name for group in (_SCROLL, _GRID, _GROUP)
     for name, row in group.items() if row.readonly)
 
 
@@ -1284,7 +1317,8 @@ def document(kind: Any = None) -> Dict[str, Any]:
 # a panel that answered GET(w, "value") would be a panel with a default nobody set
 _kind("panel", "cnv", hint="A box other widgets live in; children clip to it.",
       args=("label",),
-      rows=("grid_columns", "grid_rows", "grid_gap", "dockable", "docking"),
+      rows=("grid_columns", "grid_rows", "grid_gap", "dockable", "docking",
+            "accordion"),
       role={"default": "panel"})
 _kind("text", "", hint="One line of text, drawn in the skin's ink.",
       args=("label",), role={"default": "text"})
@@ -1369,6 +1403,18 @@ _kind("scroll", "", base="panel",
       hint="A viewport: the children added to it land in one inner panel that the "
       "wheel, a thumb drag or the page keys slide, clipped to what fits.",
       rows=("offset", "content", "travel", "bar", "notch", "rows"))
+# a group is a header and a body, both built by the tree rather than by the
+# script: ``add`` hands every child to the body, so a group's contents cannot
+# land on top of the header. ``folded`` is the only one of its rows a person's
+# click writes by itself; ``cell`` and ``order`` are the two the arrangement
+# answers with, and ``dockable`` - the row a panel already carries - is read the
+# other way round here: on a panel it *offers* cells, on a group it says the
+# group may be picked up and put into one.
+_kind("group", "", base="panel",
+      hint="A box with a header: a title, a fold, and children that live in its "
+      "body, which can be reordered and docked into a cell of a dockable grid.",
+      args=("title",),
+      rows=("title", "folded", "foldable", "cell", "order"))
 # adsr and keybed hold a value but own no min/max rows, so value restates its
 # own bounds the way button and toggle do - the range is the table's promise,
 # not something a script can move out from under the face

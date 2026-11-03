@@ -1,10 +1,12 @@
-"""The fm_synth example, on paper, as the plan's stage 2 acceptance line.
+"""The fm_synth example, on paper, as the plan's acceptance line.
 
-``examples/fm_synth`` is where two named scenes first exist in something a person
-can run: ``root`` keeps the front panel with Play on it, ``voices`` carries the FM
-parameters inside a scroll area, and the ``View`` menu lists both. This file runs
-the shipped script - no copy of it lives here - and asks the plan's questions of
-the tree it builds.
+``examples/fm_synth`` is where the whole four-stage stack first exists in something
+a person can run: ``root`` keeps the front panel with Play on it, ``voices`` carries
+the FM parameters inside a scroll area, the ``View`` menu lists both, that page is
+built out of the layout verbs, and its three sections are groups - foldable,
+re-orderable from a menu, and dockable into the spare cell of the grid they sit in.
+This file runs the shipped script - no copy of it lives here - and asks the plan's
+questions of the tree it builds.
 
 The stage is a real one, in the same shape as ``test_metronome_example.py`` and
 one step further: a :class:`~crude.project.Project` loaded from the example's own
@@ -23,9 +25,14 @@ a switch.
 
 The layout verbs are asserted here rather than only in their own file, because the
 question this example answers is whether a script can build a page out of them:
-grids and stacks that place the knobs and the help lines, ``fill`` rows that are as
+grids and stacks that place the boxes and the help lines, ``fill`` rows that are as
 wide as the viewport, glues that carry the scope and the status line through a
 resize, and ``GET`` reading every one of those decisions back.
+
+The groups are asserted the same way, because stage 4's acceptance line is this
+scene: three groups in a dockable grid, the fold and the reorder driven by menu rows
+that a click runs through the handler bridge, a header dragged to the free cell, and
+the refusal a drop onto a taken cell gives in words.
 """
 
 from __future__ import annotations
@@ -45,6 +52,9 @@ from crude.pd import FakeLibpd, PdRuntime, PdSession
 from crude.project import LoadOptions, Project, ResourceTable, load_manifest
 from crude.runtime import FakeClock, Runtime
 from crude.ui import ROOT_WORKSPACE, RecordingRenderer, UIContext, Widget
+from crude.ui.group import (body_of, chevron_box, folded_of, header_box,
+                            header_of)
+from crude.ui.grid import spec_of
 from crude.ui.menu import BAR_HEIGHT, Menu, MenuBar
 from crude.ui.scroll import view_of, view_width
 
@@ -97,6 +107,59 @@ def bar_of(value: Any) -> MenuBar:
 def lines_of(stage) -> List[str]:
     """What the example's log view is showing, read the way a script reads it."""
     return [str(line) for line in stage.say('GET(log, "lines")')]
+
+
+def settle(stage, frames: int = 6) -> int:
+    """Layout until a frame answers that nothing moved; how many frames it took.
+
+    The scene's own geometry is already right after the first pass - every test that
+    needs it says so below - but a group's ``cell`` and ``order`` are rows measured
+    after the arrangement, so the numbers a script reads are only all true one frame
+    later, which is exactly what a live window does anyway.
+    """
+    moved = [stage.ui.layout() for _ in range(frames)]
+    assert moved[-1] == 0, f"the scene never settled: {moved}"
+    return len(moved)
+
+
+def painted(stage):
+    """One frame of the shipped tree, recorded rather than drawn."""
+    held = RecordingRenderer()
+    held.begin(640, 420, 640, 420)
+    stage.ui.root.paint(held, stage.ui.skin)
+    return held
+
+
+def pick(stage, menu: str, label: str):
+    """Trigger one shipped menu row, through the popup's own button."""
+    held = menu_of(stage.say(menu))
+    held.show()
+    row = [item for item in held.items if item.label == label][0]
+    row.trigger()
+    return row
+
+
+def refusal(stage, source: str) -> str:
+    """What the bindings answer when a script asks for something impossible.
+
+    :meth:`say` insists a script line worked, so the error is collected here - whole,
+    because the traceback is the first line and the sentence the plan asks for is the
+    one after ``Runtime Error: ``.
+    """
+    value, error = stage.program.run(source)
+    assert error is not None, f"{source} was accepted: {value}"
+    return error.as_string()
+
+
+def sections(stage) -> List[Widget]:
+    """The three groups the voices page is built out of, in script order."""
+    return [widget(stage.say(word)) for word in
+            ("carrier", "modulator", "filter")]
+
+
+def open_box_at(open_boxes, groups, there):
+    """The box this group had before the fold, read off the list taken above."""
+    return open_boxes[groups.index(there)]
 
 
 # -- the stage ----------------------------------------------------------
@@ -244,15 +307,32 @@ def test_the_voices_page_is_a_scene_of_its_own_with_the_fm_parameters_on_it(stag
     assert page.parent is panel
     assert page.kind.name == "scroll"
     assert page.workspace == VOICES
-    # what went *inside* the viewport is three blocks - a row of dials, the graph
-    # and a column of notes - each holding its own children, because a NODE_ADD
-    # under a scroll is routed to the content panel rather than landing beside it
-    blocks = [widget(stage.say(word)) for word in ("dials", "graph", "notes")]
+    # what went *inside* the viewport is three blocks - the grid of sections, the
+    # graph and a column of notes - each holding its own children, because a
+    # NODE_ADD under a scroll is routed to the content panel rather than landing
+    # beside it
+    deck = widget(stage.say("deck"))
+    blocks = [deck] + [widget(stage.say(word)) for word in ("graph", "notes")]
     assert all(block.parent is page.content_child for block in blocks)
     assert page.content_child.children == blocks, \
         "the shipped NODE_ADD order is the content order"
-    assert blocks[0].children == [widget(stage.say(word)) for word in
-                                  ("index", "gate", "cut")]
+    # the deck holds the three groups and nothing else, and a group's children are
+    # the two panels it was built out of - the script never had to dodge them
+    groups = sections(stage)
+    assert deck.children == groups
+    for there in groups:
+        assert there.kind.name == "group"
+        assert there.parent is deck
+        assert there.children == [header_of(there), body_of(there)]
+        assert there.workspace == VOICES
+    # each control went into the group the script named, which is the same claim
+    # ``NODE_ADD`` makes under a viewport - the body, not beside the box
+    assert [kid.name for kid in body_of(groups[0]).children] == ["Level"]
+    assert [kid.name for kid in body_of(groups[1]).children] == ["Index"]
+    assert [kid.name for kid in body_of(groups[2]).children] == ["Cutoff"]
+    assert body_of(groups[0]).children[0] is widget(stage.say("gate"))
+    assert body_of(groups[1]).children[0] is widget(stage.say("index"))
+    assert body_of(groups[2]).children[0] is widget(stage.say("cut"))
     assert blocks[2].children == [widget(stage.say(word)) for word in
                                   ("note_index", "note_level", "note_cut",
                                    "note_view")]
@@ -263,12 +343,16 @@ def test_the_voices_page_is_a_scene_of_its_own_with_the_fm_parameters_on_it(stag
 def test_the_page_is_taller_than_the_viewport_and_reaches_its_bottom(stage):
     """Travel is measured off the shipped placements, and a scroll uses all of it."""
     show(stage, VOICES)
+    settle(stage)
     page = widget(stage.say("page"))
     note = widget(stage.say("note_view"))
 
-    assert float(page.get("content")) == pytest.approx(440.0)
+    # the deck's two rows of cells, the gap under it, the graph and the column:
+    # every one of those numbers is placed by the script and measured by the pass,
+    # so the page is 590 tall in a window that gives it 370
+    assert float(page.get("content")) == pytest.approx(590.0)
     travel = float(page.get("travel"))
-    assert travel == pytest.approx(440.0 - view_of(page))
+    assert travel == pytest.approx(590.0 - view_of(page))
     assert travel > 0.0, "the shipped page does not fit its viewport"
 
     # at the top the last line of the page is below the viewport's bottom edge
@@ -304,24 +388,67 @@ def test_a_scene_glued_below_the_bar_fills_the_window_at_two_sizes(stage):
 # -- the layout verbs the example runs ----------------------------------
 
 
-def test_the_row_of_dials_is_a_grid_the_script_named_and_the_engine_solved(stage):
-    """Three knobs, three cells: the script gave sizes, ``GRID`` gave positions."""
+def test_the_sections_are_a_dockable_grid_the_script_named_and_the_engine_solved(stage):
+    """Three groups, four cells: the script named two columns, the rows are what the
+    children need, and the cell left over is the one a hand can drop a box into."""
     show(stage, VOICES)
-    dials = widget(stage.say("dials"))
-    knobs = [widget(stage.say(word)) for word in ("index", "gate", "cut")]
+    settle(stage)
+    deck = widget(stage.say("deck"))
+    groups = sections(stage)
+    knobs = [widget(stage.say(word)) for word in ("gate", "index", "cut")]
 
-    assert [float(dials.get(word)) for word in
-            ("grid_columns", "grid_rows", "grid_gap")] == [3.0, 1.0, 18.0]
-    assert all(knob.width == 64.0 and knob.height == 64.0 for knob in knobs), \
-        "the size a script placed is the size its cell holds"
-    # one row of three equal cells across the row's own width, each knob centred in
-    # its cell - the x-arithmetic the script used to write by hand
-    left, _top, width, _height = dials.screen_box
-    cell = (width - 2 * 18.0) / 3.0
-    for slot, knob in enumerate(knobs):
+    assert [float(deck.get(word)) for word in
+            ("grid_columns", "grid_rows", "grid_gap")] == [2.0, 2.0, 18.0]
+    assert float(deck.get("dockable")) == 1.0
+    assert [float(there.get("dockable")) for there in groups] == [1.0, 1.0, 1.0]
+    # the cell a child is drawn in and its place in the list are both measured rows,
+    # read back from the tree rather than from the order the script wrote them in
+    assert [float(there.get("cell")) for there in groups] == [0.0, 1.0, 2.0]
+    assert [float(there.get("order")) for there in groups] == [0.0, 1.0, 2.0]
+
+    left, top, width, height = deck.content_box()
+    cell = (width - 18.0) / 2.0
+    row = (height - 18.0) / 2.0
+    assert cell == pytest.approx(290.0)
+    assert row == pytest.approx(106.0), "the deck's own 230 is two open boxes"
+    for slot, there in enumerate(groups):
+        assert there.screen_box == pytest.approx(
+            (left + (slot % 2) * (cell + 18.0),
+             top + (slot // 2) * (row + 18.0), cell, 106.0))
+
+    # a group is as tall as its band plus what its body holds, which is the one
+    # height in this scene no line of the script writes
+    for there, knob in zip(groups, knobs):
+        assert there.height == pytest.approx(header_box(there)[3] + 18.0 +
+                                             knob.height)
+        assert knob.parent is body_of(there)
+        assert knob.width == 64.0 and knob.height == 64.0, \
+            "the size a script placed is the size its body keeps"
+        # one ``align center`` row per body: the dial in the middle of the box, the
+        # same x-arithmetic a cell used to give the knob when the three of them sat
+        # in the grid directly
+        room = body_of(there)
         assert knob.screen_box[0] == pytest.approx(
-            left + slot * (cell + 18.0) + (cell - knob.width) / 2.0, abs=1.0)
-        assert knob.parent is dials
+            room.screen_box[0] + (room.width - 64.0) / 2.0, abs=1.0)
+
+
+def test_the_grid_offers_one_cell_nobody_is_sitting_in(stage):
+    """``GRID`` gives a panel as many cells as its children need, and three boxes in
+    two columns therefore make a fourth - the cell the script left empty so that a
+    drag has somewhere to go, and the one a number past it is refused for.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    deck = widget(stage.say("deck"))
+
+    assert [there.name for there in stage.say("GROUPS(deck)")] == \
+        ["carrier", "modulator", "filter"]
+    assert float(deck.get("grid_columns")) * float(deck.get("grid_rows")) == 4.0
+    assert [float(there.get("cell")) for there in sections(stage)] == [0.0, 1.0, 2.0]
+
+    said = refusal(stage, "GROUP_DOCK(filter, 4)")
+    assert "Runtime Error: GROUP_DOCK: " in said
+    assert "has 4 cells, counted from 0, and 4 is not one of them" in said
 
 
 def test_the_note_lines_are_one_column_with_one_gap(stage):
@@ -347,7 +474,7 @@ def test_a_row_that_fills_is_as_wide_as_the_room_the_viewport_gives(stage):
     is the width the viewport hands it - not against the window this file names."""
     show(stage, VOICES)
     page = widget(stage.say("page"))
-    blocks = [widget(stage.say(word)) for word in ("dials", "graph", "notes")]
+    blocks = [widget(stage.say(word)) for word in ("deck", "graph", "notes")]
 
     for block in blocks:
         assert block.width == pytest.approx(view_width(page) - 24.0)
@@ -375,7 +502,8 @@ def test_what_a_layout_verb_wrote_GET_reads_back(stage):
         "left -> parent.left", "right -> parent.right", "bottom -> parent.bottom"]
     show(stage, VOICES)
     assert stage.say('GET(notes, "place")') == [], "a stack is not a glue"
-    assert float(stage.say('GET(dials, "grid_columns")')) == 3.0
+    assert float(stage.say('GET(deck, "grid_columns")')) == 2.0
+    assert float(stage.say('GET(deck, "grid_rows")')) == 2.0
 
 
 def test_the_scope_and_the_status_line_follow_the_window(stage):
@@ -440,6 +568,226 @@ def test_a_frame_reports_the_same_numbers_from_either_page(stage):
     show(stage, VOICES)
     stage.loop.step()
     assert lines_of(stage) == said
+
+
+# -- the groups on the voices page --------------------------------------
+
+
+def test_the_fold_row_closes_every_body_and_the_open_row_gives_them_back(stage):
+    """A menu row is the same gesture a hand on the chevron is, on all three boxes.
+
+    The rows call ``GROUP_FOLD`` and nothing else: the script never resizes a group,
+    because a fold is a measurement - the body's room is taken away and the box is
+    what the band measures - and the pass writes the height back on the next frame.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    groups = sections(stage)
+    open_boxes = [there.screen_box for there in groups]
+
+    pick(stage, "section_menu", "Fold every section")
+    settle(stage)
+
+    assert [float(there.get("folded")) for there in groups] == [1.0, 1.0, 1.0]
+    for there in groups:
+        assert not body_of(there).visible
+        assert there.height == pytest.approx(header_box(there)[3] + 18.0)
+        # ``align start`` on the grid: a closed band sits at the top of the cell its
+        # open self measured, rather than in the middle of the room it left
+        assert there.screen_box[:2] == pytest.approx(
+            open_box_at(open_boxes, groups, there)[:2])
+    # the cells do not shrink with their boxes: the deck is placed at two rows of
+    # 106, and the room a page holds is the page's own, not a fold's
+    page = widget(stage.say("page"))
+    assert float(page.get("content")) == pytest.approx(590.0)
+
+    words = painted(stage).texts()
+    assert {"carrier", "modulator", "filter"} <= set(words)
+    assert "Level" not in words and "Cutoff" not in words, \
+        "a hidden body is neither painted nor clickable"
+    assert painted(stage).count("atlas") == 3, "the three marks are still there"
+
+    pick(stage, "section_menu", "Open every section")
+    settle(stage)
+    for there, before in zip(groups, open_boxes):
+        assert there.screen_box == pytest.approx(before)
+    assert all(body_of(there).visible for there in groups)
+
+
+def test_a_chevron_under_the_pointer_folds_the_box_it_belongs_to(stage):
+    """The mark the face draws and the target the gesture tests are one rectangle.
+
+    The header panel is invisible on purpose, so a press in the band is claimed by
+    the group - which is what makes the mark clickable without a second widget in
+    the box to keep in the tree, in the clip and in the tab order.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    carrier = widget(stage.say("carrier"))
+    mark = chevron_box(carrier)
+    assert mark[2] > 0.0 and mark[3] > 0.0
+
+    stage.ui.router.click(mark[0] + mark[2] / 2.0, mark[1] + mark[3] / 2.0)
+    settle(stage)
+
+    assert folded_of(carrier)
+    assert carrier.height == pytest.approx(header_box(carrier)[3] + 18.0)
+    assert not body_of(carrier).visible
+    # the other two boxes were not asked about
+    assert [folded_of(there) for there in sections(stage)[1:]] == [False, False]
+
+    stage.ui.router.click(mark[0] + mark[2] / 2.0, mark[1] + mark[3] / 2.0)
+    settle(stage)
+    assert not folded_of(carrier), "the same mark opens it again"
+
+
+def test_the_reorder_rows_change_the_order_the_grid_lays_the_cells_out_in(stage):
+    """``GROUP_MOVE`` is a re-arrange: the z-order is what a grid enumerates, so the
+    cell a box is drawn in follows the list rather than the other way round.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    deck = widget(stage.say("deck"))
+    groups = sections(stage)
+
+    pick(stage, "section_menu", "Filter first")
+    settle(stage)
+    assert [there.name for there in deck.children] == [
+        "filter", "carrier", "modulator"]
+    assert [float(there.get("cell")) for there in groups] == [1.0, 2.0, 0.0]
+    assert groups[2].screen_box == pytest.approx(
+        (deck.content_box()[0], deck.content_box()[1], 290.0, 106.0))
+
+    pick(stage, "section_menu", "Carrier first")
+    settle(stage)
+    assert [there.name for there in deck.children] == [
+        "carrier", "filter", "modulator"]
+    assert [float(there.get("cell")) for there in groups] == [0.0, 2.0, 1.0]
+    assert [float(there.get("order")) for there in groups] == [0.0, 2.0, 1.0]
+
+
+def test_the_accordion_row_is_the_prop_on_the_panel_holding_the_groups(stage):
+    """`One at a time` is the holder's rule, and the row writing it is a toggle.
+
+    The checkable row latches its own value before the script's function runs, and
+    the function reads that value back off the handle ``MENU_CHECK`` handed it - so
+    the row is the prop, in both directions, with nothing kept anywhere else.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    deck = widget(stage.say("deck"))
+    groups = sections(stage)
+    assert float(deck.get("accordion")) == 0.0
+
+    row = pick(stage, "section_menu", "One at a time")
+    assert row.checked
+    assert float(deck.get("accordion")) == 1.0
+
+    stage.say("GROUP_FOLD(carrier, 1)")
+    settle(stage)
+    assert [float(there.get("folded")) for there in groups] == [1.0, 0.0, 0.0]
+
+    stage.say("GROUP_FOLD(carrier, 0)")
+    settle(stage)
+    # opening one closed the others: the accordion is the holder's answer about the
+    # set, and it fires on the transition rather than on every frame
+    assert [float(there.get("folded")) for there in groups] == [0.0, 1.0, 1.0]
+    assert [there.height for there in groups] == [106.0, 42.0, 42.0]
+
+    row_again = pick(stage, "section_menu", "One at a time")
+    assert not row_again.checked and row is row_again
+    assert float(deck.get("accordion")) == 0.0
+
+
+def test_a_band_dragged_over_the_grid_lands_on_the_free_cell(stage):
+    """The whole gesture on the shipped page: capture, outlines, drop, cell.
+
+    Every number here is measured off the script's own ``GRID``, and the pointer goes
+    through the router rather than onto a function: this is the test that says the
+    scene a person runs is the scene the gesture works on.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    deck = widget(stage.say("deck"))
+    carrier = widget(stage.say("carrier"))
+    band = header_box(carrier)
+
+    stage.ui.router.move_to(band[0] + 20.0, band[1] + band[3] / 2.0)
+    stage.ui.router.press()
+    settle(stage)
+
+    assert stage.ui.router.capture is carrier
+    assert float(deck.get("docking")) == 1.0, "a drag is held"
+    assert painted(stage).count("polyline") == 4, "all four cells are worth drawing"
+
+    spare = spec_of(deck).rect_of(3, deck.content_box())
+    assert spare == pytest.approx((341.0, 173.0, 290.0, 106.0))
+    stage.ui.router.move_to(spare[0] + spare[2] / 2.0, spare[1] + spare[3] / 2.0)
+    stage.ui.router.release()
+    settle(stage)
+
+    assert float(carrier.get("cell")) == 3.0
+    assert carrier.screen_box == pytest.approx(spare)
+    assert [there.name for there in deck.children] == [
+        "modulator", "filter", "carrier"]
+    assert [float(there.get("cell")) for there in sections(stage)] == [3.0, 1.0, 2.0]
+    assert float(deck.get("docking")) == 0.0, "the hand let go"
+    assert painted(stage).count("polyline") == 0
+
+    assert float(stage.say("GROUP_UNDOCK(carrier)")) == -1.0
+    settle(stage)
+    # giving the claim up does not put the box back where it came from - it takes the
+    # first cell the pass finds free, which is the one its own old cell vacated
+    assert [float(there.get("cell")) for there in sections(stage)] == [0.0, 1.0, 2.0]
+
+
+def test_a_cell_that_is_taken_is_refused_rather_than_stacked(stage):
+    """The same fact two ways: a hand is answered by nothing moving, a script by a
+    sentence that names the cell, the panel and what is already sitting in it.
+    """
+    show(stage, VOICES)
+    settle(stage)
+    groups = sections(stage)
+    before = [there.screen_box for there in groups]
+    band = header_box(groups[0])
+
+    stage.ui.router.move_to(band[0] + 20.0, band[1] + band[3] / 2.0)
+    stage.ui.router.press()
+    settle(stage)
+    deck = widget(stage.say("deck"))
+    target = spec_of(deck).rect_of(1, groups[1].parent.content_box())
+    stage.ui.router.move_to(target[0] + target[2] / 2.0,
+                            target[1] + target[3] / 2.0)
+    stage.ui.router.release()
+    settle(stage)
+
+    assert [there.screen_box for there in groups] == before, "nothing moved"
+    assert float(groups[0].get("cell")) == 0.0
+
+    said = refusal(stage, "GROUP_DOCK(carrier, 1)")
+    assert "Runtime Error: GROUP_DOCK: " in said
+    assert "cell 1 of " in said and "already holds" in said
+    assert "it is a cell, not a stack" in said
+
+
+def test_the_sections_menu_is_its_own_because_view_is_recomposed(stage):
+    """``MENU_WORKSPACES`` throws its popup away and rebuilds it from the scenes there
+    are now, so a fold row written beside it would vanish the next time a person
+    clicked View - which is why this example writes six rows of its own.
+    """
+    view = menu_of(stage.say("view_menu"))
+    section = menu_of(stage.say("section_menu"))
+    bar = bar_of(stage.say("bar"))
+
+    assert rows(section) == ["Fold every section", "Open every section",
+                             "Carrier first", "Modulator first", "Filter first",
+                             "One at a time"]
+    section.show()
+    assert rows(view) == [ROOT_WORKSPACE, VOICES], "the scene rows are not there"
+    view.show()
+    assert rows(view) == [ROOT_WORKSPACE, VOICES], "and they survive being opened"
+    assert [menu.title for menu in bar.menus] == [
+        "File", "View", "Audio", "MIDI", "Serial", "Sections"]
 
 
 # -- the View menu ------------------------------------------------------

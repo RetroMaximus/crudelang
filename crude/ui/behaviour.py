@@ -41,6 +41,7 @@ import math
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .geometry import clamp
+from .group import drop, fold, on_header, on_mark
 from .input import SCROLL_NOTCH
 from .props import get_kind
 from .scroll import (bottom as scroll_bottom, page, scroll_by, slide,
@@ -756,6 +757,61 @@ def _viewport() -> Dict[str, Callable[..., Any]]:
 
 
 # --------------------------------------------------------------------------
+# the group: a fold on the mark, a dock on the handle
+# --------------------------------------------------------------------------
+
+def _group() -> Dict[str, Callable[..., Any]]:
+    """A ``group``: the chevron folds it, the header is the handle it is dragged by.
+
+    One band, two targets, and the press is what says which one the hand meant -
+    the mark at its far end is the fold and the rest of the band is the handle.
+    Both questions are asked of :mod:`crude.ui.group`, by :func:`on_mark` and
+    :func:`on_header`, which is the same module the face measured the mark out of:
+    the rectangle a person aims at is the one a click answers to.
+
+    Nothing moves while the drag lasts. The layout pass owns a group's box - a group
+    in a grid is in the cell it was assigned, and a ``PLACE`` between two frames is
+    overruled by the next one - so a ghost following the pointer would be one widget
+    drawn in two places at once. What the hand gets instead is the panel under it
+    outlining every cell, which :mod:`crude.ui.context` already switches on for as
+    long as a drag is held; the release is the moment the group moves, and it moves
+    into exactly the cell the outline was under.
+
+    A release that means nothing raises nothing. Over a taken cell, over the gap
+    between two, or over a panel with no cells at all, :func:`crude.ui.group.drop`
+    answers ``None`` and the group stays where it was: a pointer is not a request,
+    and the reply a hand can read is the thing not moving. The script's verb is a
+    request, and :func:`crude.ui.group.dock` does name the reason - see
+    ``GROUP_DOCK`` in :mod:`crude.bindings.ui`.
+    """
+
+    def pressed(widget: Any, args: Tuple[Any, ...]) -> None:
+        if not _is_gesture(args):
+            return
+        x, y = float(_args(args, 0)), float(_args(args, 1))
+        scratch = _held(widget)
+        if on_mark(widget, x, y):
+            # the fold is decided on the release, like every button in this tree:
+            # a hand that slides off the mark before letting go meant a drag
+            scratch["mark"] = True
+            return
+        if on_header(widget, x, y) and bool(widget.get("dockable")):
+            scratch["pickup"] = True
+
+    def released(widget: Any, args: Tuple[Any, ...]) -> None:
+        if not _is_gesture(args):
+            return
+        x, y = float(_args(args, 0)), float(_args(args, 1))
+        scratch = _held(widget)
+        if scratch.pop("mark", False) and on_mark(widget, x, y):
+            fold(widget)
+        if scratch.pop("pickup", False):
+            drop(widget, x, y)
+
+    return {"on_press": pressed, "on_release": released}
+
+
+# --------------------------------------------------------------------------
 # the synth widgets: gestures against a picture, not a thumb
 # --------------------------------------------------------------------------
 
@@ -1049,6 +1105,9 @@ BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     # a viewport moves its content rather than a value, and every one of its
     # gestures writes the ``offset`` prop the content panel is placed from
     "scroll": _viewport(),
+    # a group moves nothing of its own value: one target folds it and the other
+    # hands it to whatever cell the pointer was over when it let go
+    "group": _group(),
 }
 
 

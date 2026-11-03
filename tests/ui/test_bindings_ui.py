@@ -115,11 +115,13 @@ _EXPECTED_BINDINGS = (
     "NUMBER", "METER", "RADIO", "DROPDOWN",
     "WAVEFORM", "SPECTRUM", "PLOT", "LOGVIEW", "ADSR", "CURVE", "XY_PAD", "KEYBED",
     "PRESET_BAR", "SCROLL",
-    "ICON",
+    "ICON", "GROUP",
     "WIDGET_DEFINE", "PROP_DEFINE",
     "PLACE", "NODE_ADD",
     "ANCHOR", "UNANCHOR", "PACK", "PAD",
     "HSTACK", "VSTACK", "GRID", "UNSTACK",
+    "GROUP_FOLD", "GROUP_MOVE", "GROUP_UP", "GROUP_DOWN",
+    "GROUP_DOCK", "GROUP_UNDOCK", "GROUPS",
     "LINK_VALUE", "LINK_STATE", "UNLINK",
     "ON_CHANGE", "ON_ENTER", "ON_LEAVE", "ON_MOVE", "ON_PRESS",
     "ON_RELEASE", "ON_CLICK", "ON_FOCUS", "ON_BLUR", "ON_KEY",
@@ -170,6 +172,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("PRESET_BAR", ("labels", "value"), 2),
     ("SCROLL", ("label",), 1),
     ("ICON", ("glyph", "size"), 1),
+    ("GROUP", ("title", "parent"), 1),
     ("WIDGET_DEFINE", ("kind", "base", "pd_object", "hint"), 3),
     ("PROP_DEFINE",
      ("kind", "name", "type", "default", "min", "max", "pd_name", "hint"), 4),
@@ -183,6 +186,13 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("VSTACK", ("panel", "gap", "options"), 2),
     ("GRID", ("panel", "columns", "gap", "options"), 3),
     ("UNSTACK", ("panel",), 0),
+    ("GROUP_FOLD", ("group", "folded"), 1),
+    ("GROUP_MOVE", ("group", "position"), 0),
+    ("GROUP_UP", ("group",), 0),
+    ("GROUP_DOWN", ("group",), 0),
+    ("GROUP_DOCK", ("group", "cell", "panel"), 1),
+    ("GROUP_UNDOCK", ("group",), 0),
+    ("GROUPS", ("panel",), 0),
     ("LINK_VALUE", ("source", "target", "two_way"), 1),
     ("LINK_STATE", ("source", "prop", "target", "target_prop", "two_way"), 2),
     ("UNLINK", ("widget", "prop"), 2),
@@ -249,7 +259,8 @@ def test_the_two_events_a_script_answers_are_wired_the_same_way(event):
 #: every catalog constructor whose positional arguments are literal prop names.
 #  ``TOGGLE``'s ``on`` and ``ICON``'s ``size`` translate through a rule of
 #  their own and have dedicated tests below, because there is no ``SET`` on
-#  any row that would put a toggle "on" or resize an icon's box.
+#  any row that would put a toggle "on" or resize an icon's box - and neither
+#  has ``GROUP``'s ``parent``, which is tested with the rest of the group verbs.
 _DIRECT_CONSTRUCTORS = [
     ("PANEL", "panel", [("label", '"deck"')]),
     ("TEXT", "text", [("label", '"METRONOME"')]),
@@ -287,6 +298,7 @@ _DIRECT_CONSTRUCTORS = [
                           ("octaves", "3")]),
     ("PRESET_BAR", "preset_bar", [("labels", '["a", "b"]'), ("value", "1")]),
     ("SCROLL", "scroll", [("label", '"page"')]),
+    ("GROUP", "group", [("title", '"carrier"')]),
 ]
 
 
@@ -385,7 +397,7 @@ def test_every_catalog_kind_has_its_own_constructor(run):
         "WAVEFORM": '"x"', "SPECTRUM": '"x"', "PLOT": '"x"',
         "LOGVIEW": '"x"', "ADSR": '"x"', "CURVE": '"x"',
         "XY_PAD": '"x"', "KEYBED": '"x"', "PRESET_BAR": '["a", "b"]',
-        "SCROLL": '"x"',
+        "SCROLL": '"x"', "GROUP": '"x"',
     }
     produced = set()
     for word, (kind, _args, _opt) in CONSTRUCTORS.items():

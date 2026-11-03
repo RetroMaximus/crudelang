@@ -49,9 +49,12 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
 #  mark it adds is the thumb, which is a picture inside the plate all the same.
 #  ``panel`` is the odd one out among the containers: its face adds a label, which
 #  is what a bare plate already drew, and outlines cells only while a drag is
-#  looking for one - so an ordinary panel is still painted by the plate alone
+#  looking for one - so an ordinary panel is still painted by the plate alone.
+#  ``group`` draws no plate at all: the header band, its word and its mark are the
+#  whole picture, and the body under them is the panel it is built on.
 DISPLAY = ("waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
-           "keybed", "slider", "meter", "radio", "knob", "scroll", "panel")
+           "keybed", "slider", "meter", "radio", "knob", "scroll", "group",
+           "panel")
 
 #: the kinds a bare plate and a word still describe: nothing here draws inside
 #  the plate, because a toggle is the plate

@@ -54,6 +54,14 @@ from .context import (
     window_context,
 )
 from .faces import FACES, Face, face_for
+# the questions a group answers about itself, exported so the bindings can reach
+# them (a binding imports from this package and nothing deeper). The header band
+# comes with them: a script that folds a group needs to know what it just took.
+# The rest of :mod:`crude.ui.group` - the boxes the face measures and the gesture
+# routes - stays inside the UI layer the way :mod:`crude.ui.scroll` keeps its own
+# viewport arithmetic, and is reached by the modules that import the file.
+from .group import (GROUP_KIND, HEADER_HEIGHT, dock, fold, groups_of,
+                    is_group, move_by, move_to, order_of, undock)
 from .geometry import (
     ALIGNMENTS,
     ARC_TOLERANCE,
@@ -153,6 +161,7 @@ from .layout import (
     # ``tests/ui/test_grid_spec.py`` pins which of the two each spelling answers.
     grid,
     hstack,
+    kept,
     layout_of,
     metric,
     pack,
@@ -285,11 +294,14 @@ __all__ = [
     # the placement pass: place, pack, anchors, stacks, and the device grid
     "place", "pack", "pack_of", "pad", "anchor", "anchors_of", "unanchor",
     "stack", "hstack", "vstack", "grid", "arrange", "unstack", "resolve",
-    "layout_of", "clear_layout", "describe_layout", "metric", "snap",
+    "layout_of", "kept", "clear_layout", "describe_layout", "metric", "snap",
     "snap_box", "Layout", "Stack", "Anchor", "LayoutError", "EDGES", "AXIS",
     "PACK_POLICIES", "STACK_DIRECTIONS", "STACK_ALIGNMENTS", "LAYOUT_TOKENS",
     "DEFAULT_GAP", "TOLERANCE",
     "as_policy", "as_edge", "as_direction", "as_alignment",
+    # a section of a page: a header, a body, an order and a cell to be dropped in
+    "GROUP_KIND", "HEADER_HEIGHT", "is_group", "groups_of", "fold", "dock",
+    "undock", "move_to", "move_by", "order_of",
     # the pass that makes a frame: layout, the pointer, the tree in z-order
     "UIContext", "UIContextError", "FrameReport", "DEFAULT_UI_SIZE",
     "BUDGET_MS", "window_context",

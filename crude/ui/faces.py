@@ -31,6 +31,8 @@ import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .geometry import TAU, Point, TEXT_HEIGHT, clamp, rect_corners
+from .group import (MARK_FOLDED, MARK_OPEN, TITLE_PAD, chevron_box,
+                    foldable_of, folded_of, header_box, title_of)
 from .grid import cells as grid_cells
 from .scroll import thumb_rect
 from .skin import Skin
@@ -350,6 +352,49 @@ def _draw_grid(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
             continue
         renderer.polyline(rect_corners(*box), thickness=edge,
                           color=found.border, closed=True)
+    return renderer.op_count - before
+
+
+def _draw_group(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """A group's header: the word it is named by, the mark that folds it, a rule.
+
+    No plate is drawn here. ``base_face`` has already given the group the panel's
+    own frame, and a second frame painted inside it is the thing this module has
+    always refused about a viewport; what a header needs that a panel does not have
+    is three marks - the title, the chevron, and the line under them, which is what
+    keeps a folded group visibly the same box it was before it folded.
+
+    Both rectangles come out of :mod:`crude.ui.group`: the band from
+    :func:`~crude.ui.group.header_box` and the mark from
+    :func:`~crude.ui.group.chevron_box`, which are the same two functions the
+    gesture tests a press against. A mark a hand can hit being exactly the mark the
+    eye was shown is how a scroll thumb and a grid cell are drawn too, and a group
+    is the third place that promise is kept.
+
+    The words are drawn here rather than left to :meth:`paint_label`, which
+    registering a face replaces, because a group's caption belongs at the top of
+    its box: centred in the whole thing, it would move when the body folded and
+    would sit on top of the knobs the group was built to hold.
+    """
+    before = renderer.op_count
+    left, top, wide, high = header_box(widget)
+    if wide <= 0.0 or high <= 0.0:
+        return 0
+    mark = skin.resolve("caption")
+    said = title_of(widget)
+    if said:
+        middle = top + (high - mark.font * TEXT_HEIGHT) * 0.5
+        renderer.text(left + TITLE_PAD, middle, said, mark.font, mark.ink,
+                      align="left")
+    if foldable_of(widget):
+        box = chevron_box(widget)
+        if box[2] > 0.0:
+            renderer.glyph(box[0], box[1], box[2], box[3],
+                           MARK_FOLDED if folded_of(widget) else MARK_OPEN,
+                           mark.ink)
+    if not folded_of(widget):
+        renderer.line((left, top + high), (left + wide, top + high),
+                      color=found.border)
     return renderer.op_count - before
 
 
@@ -770,6 +815,9 @@ FACES: Dict[str, Face] = {
     # a viewport is a panel with a mark on it: the plate and the clip come from the
     # base face and this only answers the thumb
     "scroll": _draw_scroll,
+    # a group is a panel with a header on it: its plate is the base face's, its
+    # body is a panel that paints itself, and this answers the band between them
+    "group": _draw_group,
     # a panel is the plate and the word and nothing else, until it is marked
     # dockable and something is being dragged - which is the only decoration the
     # face below ever adds, so an ordinary panel is drawn exactly as it was before

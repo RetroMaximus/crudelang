@@ -31,10 +31,10 @@ from crude.ui import (CONTAINER_KIND, InputRouter, MEASURED, MODS,
                       WidgetError, define, define_prop, format_value,
                       install_behaviour, reset, root_panel, top_at)
 
-#: the twenty-two kinds the catalog ships, same list as :mod:`test_props`
+#: the twenty-three kinds the catalog ships, same list as :mod:`test_props`
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "plot", "logview", "scroll",
+           "waveform", "spectrum", "plot", "logview", "scroll", "group",
            "adsr", "curve", "xy", "keybed", "preset_bar")
 
 
@@ -344,7 +344,7 @@ def test_a_panel_is_a_panel_kind_and_a_panel_kind_is_a_container():
     held = Panel()
     assert held.kind.name == CONTAINER_KIND
     assert held.is_container is True
-    assert str(held.kind) == "Kind(panel, 27 props, emits [cnv])"
+    assert str(held.kind) == "Kind(panel, 28 props, emits [cnv])"
     # a Panel built on a script kind is still a panel, and the kind is its own
     define("card", CONTAINER_KIND)
     assert Panel(kind="card").kind.name == "card"

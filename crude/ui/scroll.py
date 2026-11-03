@@ -37,7 +37,8 @@ from typing import Any, List, Optional, Tuple
 
 from .geometry import Rect
 
-__all__ = ["BAR_WIDTH", "MIN_THUMB", "content_of", "rows_in", "view_of",
+__all__ = ["BAR_WIDTH", "VIEWPORT_KIND", "MIN_THUMB", "content_of", "rows_in",
+           "view_of",
            "view_width", "measure", "travel_of", "content_height", "slide",
            "scroll_by", "page", "top", "bottom", "thumb_rect", "fit_content",
            "reconcile", "restack"]
@@ -45,6 +46,10 @@ __all__ = ["BAR_WIDTH", "MIN_THUMB", "content_of", "rows_in", "view_of",
 #: how wide the thumb is drawn, in logical pixels; a scroll bar is read, not aimed
 #  at with precision, and a fifth of a device list's row is wide enough to see
 BAR_WIDTH = 6.0
+
+#: the kind whose content panel this module slides. Named here rather than imported
+#  from :mod:`crude.ui.widget`, which imports this module.
+VIEWPORT_KIND = "scroll"
 
 #: the shortest thumb there is. A viewport showing a tenth of its content would
 #  otherwise be given a two-pixel mark that cannot be grabbed at all, and a bar
@@ -57,8 +62,16 @@ def content_of(scroll: Any) -> Optional[Any]:
 
     Asked of a widget that is not a scroll area it answers ``None`` rather than
     raising, because :func:`reconcile` walks a whole tree and only some of it is
-    made of viewports.
+    made of viewports. The kind is asked first and the child second for that
+    reason: ``content_child`` builds the frame it is asked about, so reading it off
+    a group - which has a content child of its own, a body, that is not slid and has
+    no ``offset`` to be slid by - would both construct a widget's panels from a
+    module that has no business doing it and hand back a panel this module's
+    arithmetic cannot answer for.
     """
+    kind = getattr(scroll, "kind", None)
+    if kind is None or VIEWPORT_KIND not in kind.chain():
+        return None
     held = getattr(scroll, "content_child", None)
     if held is None or held is scroll:
         return None
@@ -269,11 +282,14 @@ def restack(root: Any) -> int:
     Named for what the layout pass is doing rather than for this module: a caller
     that has just resolved a tree wants the whole tree settled, and a scroll area
     measured before its rows were arranged would report a content of nothing.
+
+    :func:`content_of` is the only question asked, so the kind test that decides
+    whether a widget is a viewport lives in one place and this walk cannot settle a
+    panel that is not one.
     """
     held = 0
     for widget in root.walk():
-        if getattr(widget, "content_child", None) is not None and \
-                widget.content_child is not widget:
+        if content_of(widget) is not None:
             reconcile(widget)
             held += 1
     return held

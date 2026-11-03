@@ -215,7 +215,7 @@ SLIDER(label, lo, hi, value)   VSLIDER(...)   NUMBER(label, lo, hi, value)
 METER(label, lo, hi, value)    RADIO(values)   DROPDOWN(values)
 PANEL(title)   XY_PAD(label, x, y)   KEYBED(label, low, octaves)   ADSR(...)   CURVE(...)
 SPECTRUM       WAVEFORM         PLOT(label)         LOGVIEW(label)
-PRESET_BAR(...)   PANEL(...)   SCROLL(label)
+PRESET_BAR(...)   PANEL(...)   SCROLL(label)   GROUP(title[, parent])
 ```
 
 Placement and layout:
@@ -409,6 +409,54 @@ what puts it back. Declaring an `on_enter` says "rebuild me" by itself.
 The `ui.workspaces` manifest key (`manifest.md`) reserves the names and the
 order before the script runs; `root` is index 0 whatever the list says, and a
 script that declares a reserved scene fills it in rather than colliding with it.
+
+## Groups
+
+A group is a section of a page - a band with a word on it and a body the controls
+live in - that folds, re-orders among its siblings and can be dropped into a cell of
+a `dockable` grid. These eight names are in the `ui` area; the box itself, the two
+panels it is built from and the props it answers with are `widgets.md`'s "Groups".
+
+```
+GROUP(title[, parent])                 GROUP_FOLD(group[, folded])
+GROUP_MOVE(group, position)            GROUP_UP(group)
+GROUP_DOWN(group)                      GROUP_DOCK(group, cell[, panel])
+GROUP_UNDOCK(group)                    GROUPS(panel)
+```
+
+`GROUP("carrier", deck)` is `WIDGET("group")` plus the two panels and a `SET` of the
+title: the word is the header's and the widget's name, which is why `deck/carrier` is
+the path a report prints. `parent` is the second slot rather than a prop - it is the
+widget the section is built *inside*, and leaving it out puts the group in the scene
+on screen like every other constructor does. Children go to the body: a
+`NODE_ADD(carrier, knob)` never has to know the band is there.
+
+`GROUP_FOLD(carrier, 1)` closes the group to its band, `0` opens it and leaving the
+second word out switches it; all three are the chevron, and the answer is the state
+the group is in now rather than a success flag, so a menu row can decide whether its
+own caption should read Close or Open. Nothing is resized by the verb: how tall a
+fold leaves the box is measured by the layout pass from the rows the body holds, the
+same number a `SET(g, "folded", 1)` and a hand on the mark leave behind.
+
+`GROUP_MOVE(filter, 0)` re-orders the group among the sections it is drawn with, and
+`GROUP_UP` / `GROUP_DOWN` are that call at one step. The list they change is the list
+`VSTACK`, `HSTACK` and `GRID` arrange from, so the next pass draws the boxes in the
+new order and no script has to be told a row moved. A position past either end is
+clamped, and the answer is the place the group took - the same number
+`GET(group, "order")` reads back.
+
+`GROUP_DOCK(carrier, 2)` puts the group in the cell `GRID` counted, in the panel the
+group already lives in unless a third argument names another; the answer is the cell
+it holds, which is what `GET(group, "cell")` says. Four refusals, four facts: the
+group does not say `dockable`, the panel has no cells, the number is not one of them,
+or somebody is already drawn in it - each named in the message, because "why did my
+group not move" is not one question and one error that could mean any of them is a
+bug report rather than a fix. A pointer is told the same
+thing the other way: a drag released over a taken cell moves nothing at all.
+`GROUP_UNDOCK(carrier)` gives up the claim and nothing else - the group keeps its
+parent and takes the next free cell its order comes to - and `GROUPS(box)` is the
+array of groups a panel holds, in draw order, which is what a `View` menu loops over
+to fold or move every section of a page it did not build.
 
 ## Common handle calls
 

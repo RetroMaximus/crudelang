@@ -43,6 +43,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from .base import UIError
 from .geometry import Rect, snap, snap_box
 from .grid import GridSpec, record as record_grid
+from .group import (assign as assign_cell, cells_of, fit_group,
+                    measure as measure_groups)
 from .scroll import fit_content
 from .skin import Skin
 from .widget import Widget
@@ -52,8 +54,8 @@ __all__ = ["AXIS", "DEFAULT_GAP", "EDGES", "LAYOUT_TOKENS", "PACK_POLICIES",
            "Layout", "LayoutError", "Stack", "anchor", "anchors_of", "arrange",
            "as_alignment", "as_direction", "as_edge", "as_policy",
            "clear_layout", "describe_layout", "grid", "hstack", "layout_of",
-           "metric", "pack", "pack_of", "pad", "place", "resolve", "snap",
-           "snap_box", "stack", "unanchor", "unstack", "vstack"]
+           "kept", "metric", "pack", "pack_of", "pad", "place", "resolve",
+           "snap", "snap_box", "stack", "unanchor", "unstack", "vstack"]
 
 #: how far a size has to move before it counts as "someone changed this by hand"
 TOLERANCE = 1e-6
@@ -416,6 +418,21 @@ def layout_of(held: Any) -> Layout:
     return policy
 
 
+def kept(panel: Any) -> Widget:
+    """Where this container's children really are: itself, or the panel it keeps them in.
+
+    A viewport holds its rows in one inner panel and a group holds its contents in
+    its body, so a stack written on either of them means the widgets a script added
+    - the knobs inside ``carrier`` - and not the two panels the tree built for it.
+    Every verb that arranges a container asks this question first, which is the only
+    way ``VSTACK(carrier, 8)`` and a hand on ``carrier#body`` can say one thing;
+    a plain panel answers itself, so nothing about an ordinary row changes.
+    """
+    found = _container(panel, "a stacked widget")
+    inner = found.content_child
+    return found if inner is None else inner
+
+
 def clear_layout(held: Any) -> None:
     """Forget every policy: the widget keeps its box and goes back to the skin.
 
@@ -641,8 +658,12 @@ def stack(panel: Any, direction: Any = "horizontal", *, gap: Any = None,
     row - ``"start"``, ``"center"``, ``"end"`` or ``"stretch"`` for the whole
     height - and is overridden per child by that child's own cross-axis policy.
     Laying out replaces any stack this panel had.
+
+    A stack written on a viewport or on a group is recorded on the panel that
+    actually holds the children - see :func:`kept` - because a script that wrote
+    ``VSTACK(carrier, 8)`` meant the knobs and not the body they live in.
     """
-    found = _container(panel, "a stacked widget")
+    found = kept(panel)
     wanted = as_direction(direction)
     held = as_alignment(align, "center" if wanted == "grid" else "start")
     spec = Stack(wanted, DEFAULT_GAP if gap is None else gap, pad, held,
@@ -697,7 +718,7 @@ def arrange(panel: Any, spec: Mapping[str, Any]) -> Stack:
 
 def unstack(panel: Any) -> bool:
     """Stop arranging a panel; its children stay where the last pass left them."""
-    found = _container(panel, "a stacked widget").layout
+    found = kept(panel).layout
     if found is None or found.stack is None:
         return False
     found.stack = None
@@ -737,17 +758,26 @@ def resolve(root: Any, skin: Any, *, width: Any = None,
        a content box, an origin and a clip. Nothing below can be counted until the
        lengths it divides are known. A viewport's content panel is then given the
        width of the view this frame settled, because that half of its box is a fact
-       about the viewport rather than about the rows inside it.
+       about the viewport rather than about the rows inside it, and a group's own
+       height is settled in the same sweep - folded or not, decided from what its
+       body holds - walked from the leaves up so that a group inside a group has
+       already shrunk by the time its parent is measured against it.
     2. **pack and stacks** - parents before children, because a child's size is a
        fraction of the space its parent has. Every box is written in the parent's
        own space, so no absolute number is needed and a moved subtree re-resolves
-       itself as it goes.
+       itself as it goes. A child of a grid is put in the cell it was docked into
+       rather than the one its place in the list happens to be, and the cell it got
+       is recorded on it for the face and the next drop to read.
     3. **anchors** - in absolute space, and last, for two reasons: the target may
        live in a different panel, so its screen rect has to exist before its edges
        can be read; and an edge a script glued is a more specific claim than any
        row sizing. Glued widgets are applied in dependency order, so a badge
        anchored to a button that is itself anchored lands on the button's final
        place rather than its pre-anchor one.
+
+    One step follows the pass, answering rather than moving: every group's
+    ``order`` and ``cell`` are read off where the arrangement actually left it, so
+    a script's ``GET(g, "cell")`` describes the rectangle it was drawn into.
     """
     found = _widget(root, "a layout root")
     if not isinstance(skin, Skin):
@@ -763,6 +793,7 @@ def resolve(root: Any, skin: Any, *, width: Any = None,
     moved += _content_pass(found)
     moved += _box_pass(found, skin)
     moved += _anchor_pass(found)
+    measure_groups(found)
     return moved
 
 
@@ -775,19 +806,28 @@ def _note_pad(held: Widget, skin: Any) -> None:
 
 
 def _content_pass(root: Widget) -> int:
-    """Sweep 1b: a viewport's content is as wide as the room this frame gives it.
+    """Sweep 1b: the boxes that are facts about a container rather than its rows.
 
-    Half of :func:`~crude.ui.scroll.reconcile`, run before the boxes are counted
-    rather than after them. How tall a viewport's content is can only be measured
-    once its rows have been arranged inside it, so that half stays where it is; how
-    *wide* it is is settled by the viewport's own content box, which sweep 1 has just
-    produced. Asking the question here is what lets a row packed ``fill`` be sized
-    against this frame's view rather than the last one's, so a resized window needs
-    one pass rather than two.
+    Two answers, both had to be written before the children are arranged, and both
+    for the one reason the plan learned from a viewport's width: a stack, a column
+    and a grid all read a child's thickness to decide what it gets, so a box that
+    changed *after* the arrangement was sized against the shape this frame has
+    already given up and the change showed up a frame late.
+
+    A viewport's content panel is as wide as the room this frame gives it - the
+    half of :func:`~crude.ui.scroll.reconcile` that does not need the rows, which
+    are not arranged yet. A group is as tall as its header plus what its body
+    holds, folded taking the body's room away; it is walked in reverse tree order,
+    children before parents, because a nested group's height is part of the outer
+    group's measurement and the outer one cannot be taken until the inner has
+    settled. The tall half of a viewport stays where it is - in
+    :func:`~crude.ui.scroll.reconcile`, run after the rows have been arranged.
     """
     moved = 0
     for held in root.walk():
         moved += fit_content(held)
+    for held in reversed(list(root.walk())):
+        moved += fit_group(held)
     return moved
 
 
@@ -932,16 +972,25 @@ def _arrange_grid(panel: Widget, kids: Sequence[Widget], spec: Stack,
     The box tiled is the content box with its origin taken off, since every number
     :func:`_write` hands on is relative to that origin - which is the same box a
     face outlines in screen pixels and a gesture reads a pointer out of.
+
+    Which cell a child goes into is :func:`~crude.ui.group.cells_of`'s answer and
+    not the index in the list, because a group dropped into the far cell of a row
+    is that cell's occupant from then on and the face, the next drop and this
+    arrangement must all say the same thing. The cells are recorded back onto the
+    children for the same reason - the read-only ``cell`` row is how a script reads
+    the arrangement rather than a second copy of it.
     """
-    grid = GridSpec.of(len(kids), spec.columns, metric(skin, spec.gap))
+    cells, total = cells_of(kids, 0)
+    grid = GridSpec.of(total, spec.columns, metric(skin, spec.gap))
     record_grid(panel, grid)
     box = (0.0, 0.0, inner[2], inner[3])
     moved = 0
     for index, kid in enumerate(kids):
         policy = kid.layout
-        left, top, cell_w, cell_h = grid.rect_of(index, box)
+        left, top, cell_w, cell_h = grid.rect_of(cells[index], box)
         x, width = _cell(policy, kid.width, cell_w, "x", spec.align)
         y, height = _cell(policy, kid.height, cell_h, "y", spec.align)
+        assign_cell(kid, cells[index])
         moved += _write(kid, *_arranged(kid, policy, left + x, top + y,
                                         width, height), policy)
     return moved

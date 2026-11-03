@@ -181,7 +181,7 @@ WORKSPACE("voices")
 # reached by wheel, by the thumb or by the page keys rather than drawn past the
 # bottom edge - which is the whole reason a settings page is allowed to be long
 VAR page  = SCROLL("fm parameters")
-VAR dials = PANEL("")
+VAR deck  = PANEL("")
 VAR notes = PANEL("")
 VAR index = KNOB("Index", 0, 12, 7)
 VAR gate  = KNOB("Level", 0, 1, 1)
@@ -190,7 +190,17 @@ VAR graph = PLOT("modindex")
 VAR note_index = TEXT("Index - how far the modulator pushes the carrier off pitch")
 VAR note_level = TEXT("Level - where the envelope opens to: Play lifts the gate, this holds it")
 VAR note_cut   = TEXT("Cutoff - a lop~ after the envelope; 20 is mute, 20000 is the voice bare")
-VAR note_view  = TEXT("the View menu switches between this page and the front panel")
+VAR note_view  = TEXT("View switches pages, Sections folds and re-orders the boxes, a band drags into the spare cell")
+
+# three sections, each one a group: a band with a word on it, a body the control
+# lives in, a chevron that closes the body away and - because each says `dockable` -
+# a band a hand can pick the whole box up by and drop into another cell of the grid
+# below. The script never sees the two panels a group is built out of: adding a knob
+# to `carrier` puts it where the contents go, exactly as it does under a viewport,
+# and the box's own height is measured from it rather than written here.
+VAR carrier   = GROUP("carrier", deck)
+VAR modulator = GROUP("modulator", deck)
+VAR filter    = GROUP("filter", deck)
 
 # NODE_ADD is what puts a control *inside* the viewport. PLACE alone only moves a
 # widget, so a knob left as a sibling of the page would be drawn past its bottom
@@ -209,12 +219,15 @@ ANCHOR(page, "left")
 ANCHOR(page, "right")
 ANCHOR(page, "top")
 ANCHOR(page, "bottom")
-NODE_ADD(page, dials)
+NODE_ADD(page, deck)
 NODE_ADD(page, graph)
 NODE_ADD(page, notes)
-NODE_ADD(dials, index)
-NODE_ADD(dials, gate)
-NODE_ADD(dials, cut)
+PLACE(index, 0, 0, 64, 64)
+PLACE(gate, 0, 0, 64, 64)
+PLACE(cut, 0, 0, 64, 64)
+NODE_ADD(modulator, index)
+NODE_ADD(carrier, gate)
+NODE_ADD(filter, cut)
 NODE_ADD(notes, note_index)
 NODE_ADD(notes, note_level)
 NODE_ADD(notes, note_cut)
@@ -234,16 +247,39 @@ NODE_ADD(notes, note_view)
 # is what makes a row as wide as the room the viewport gives its content rather than
 # as wide as the window this file was written for - the content panel is as wide as
 # that room, so the row's right edge lands where the viewport's own inset begins.
-PLACE(dials, 24, 8, 580, 64)
-PACK(dials, "fill", "fixed")
-PAD(dials, 0)
-PLACE(index, 0, 0, 64, 64)
-PLACE(gate, 0, 0, 64, 64)
-PLACE(cut, 0, 0, 64, 64)
-GRID(dials, 3, 18)
-PLACE(graph, 24, 96, 580, 180)
+# The deck is the grid the three sections are drawn in and, marked `dockable`, the
+# panel that offers its cells as somewhere one can be dropped. Two columns for three
+# groups is what makes that true: the cells a grid has are the cells its children
+# need, so three boxes in two columns fill two rows and leave the fourth cell empty -
+# and a row in which every cell is already taken offers a hand nowhere to put a box
+# down. The empty cell is invisible until a band is held, because a grid draws its
+# cells only while a drag is in progress.
+#
+# Each group fills the width of its cell and keeps the height its own body measures:
+# 106 is the band, the skin's two insets and the 64 px knob, which is what a group
+# writes back for itself, and the deck's 230 is two of those rows and the one 18 px
+# gap between them. A fold does not shrink the cell, only the box inside it, and the
+# `align start` below is what keeps a closed section at the top of the room its open
+# self measured rather than floating in the middle of it. `dockable` on the group is
+# what lets a hand pick it up at all, and one `align center` row per body centres the
+# dial in the box the way a cell centred it when the three of them sat in the grid
+# directly.
+PLACE(deck, 24, 8, 580, 230)
+PACK(deck, "fill", "fixed")
+PAD(deck, 0)
+GRID(deck, 2, 18, ["align", "start", "dockable", 1])
+PACK(carrier, "fill", "fixed")
+PACK(modulator, "fill", "fixed")
+PACK(filter, "fill", "fixed")
+SET(carrier, "dockable", 1)
+SET(modulator, "dockable", 1)
+SET(filter, "dockable", 1)
+VSTACK(carrier, 8, ["align", "center"])
+VSTACK(modulator, 8, ["align", "center"])
+VSTACK(filter, 8, ["align", "center"])
+PLACE(graph, 24, 258, 580, 180)
 PACK(graph, "fill", "fixed")
-PLACE(notes, 24, 300, 580, 140)
+PLACE(notes, 24, 450, 580, 140)
 PACK(notes, "fill", "fixed")
 PAD(notes, 0)
 PLACE(note_index, 0, 0, 580, 20)
@@ -262,6 +298,23 @@ SET(cut, "label_place", "top")
 ON_CHANGE(index, FUNC(v) -> PD_SEND(p, "index", v))
 ON_CHANGE(gate,  FUNC(v) -> PD_SEND(p, "level", v))
 ON_CHANGE(cut,   FUNC(v) -> PD_SEND(p, "cutoff", v))
+
+# The three rows the Sections menu drives. Folding is written three times rather
+# than looped over `GROUPS(deck)` because a menu row that changes the page it was
+# built on is a row worth being able to read; each call is the same prop a hand on
+# the chevron writes, and the height every box comes out at is measured by the next
+# layout pass - the script never resizes anything here.
+FUNC fold_sections()
+    GROUP_FOLD(carrier, 1)
+    GROUP_FOLD(modulator, 1)
+    GROUP_FOLD(filter, 1)
+END
+
+FUNC open_sections()
+    GROUP_FOLD(carrier, 0)
+    GROUP_FOLD(modulator, 0)
+    GROUP_FOLD(filter, 0)
+END
 
 # Every frame the scope reads the last block off the output and the graph reads
 # the table; the status line says playing with the numbers it is playing at, or
@@ -297,6 +350,24 @@ VAR serial_menu = MENU(bar, "Serial")
 # one row per scene in this window, the current one ticked, picking one shows it -
 # the switch without the script writing a loop over WORKSPACE_NAMES()
 MENU_WORKSPACES(view_menu)
+
+# The sections get a menu of their own rather than rows under the two scenes, and
+# the reason is in `MENU_WORKSPACES`: that binding recomposes its popup from the
+# window's scenes every time it opens, so a row added beside it would be gone the
+# moment a person clicked View. The three "... first" rows are the reorder - the
+# order they change is the order the grid above lays the cells out in - and the
+# checkable row is the `accordion` prop on the panel that holds the groups, which is
+# what makes opening one close the other two. A checkable row is a `toggle` whose
+# value the click latches *before* the script's function runs (docs/widgets.md), and
+# `MENU_CHECK` hands back that row's handle, so the row reads its own tick rather
+# than guessing what state it was clicked into.
+VAR section_menu = MENU(bar, "Sections")
+MENU_ADD(section_menu, "Fold every section", fold_sections)
+MENU_ADD(section_menu, "Open every section", open_sections)
+MENU_ADD(section_menu, "Carrier first", FUNC() -> GROUP_MOVE(carrier, 0))
+MENU_ADD(section_menu, "Modulator first", FUNC() -> GROUP_MOVE(modulator, 0))
+MENU_ADD(section_menu, "Filter first", FUNC() -> GROUP_MOVE(filter, 0))
+VAR one_at_a_time = MENU_CHECK(section_menu, "One at a time", 0, FUNC() -> SET(deck, "accordion", GET(one_at_a_time, "value")))
 
 MENU_ADD(file_menu, "Save preset", FUNC() -> PRESET_SAVE("fm", [GET(pitch, "value"), GET(gain, "value"), GET(index, "value")]))
 MENU_ADD(file_menu, "Load bell", FUNC() -> SET(log, "lines", [STR(PRESET_LOAD("bell"))]))

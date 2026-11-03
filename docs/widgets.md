@@ -29,13 +29,13 @@ Widget {
 ```
 
 Every constructor the catalog names - `TEXT`, `BUTTON`, `SLIDER`,
-`TOGGLE`, `METER`, `NUMBER`, `VSLIDER`, `RADIO`, `DROPDOWN`, `XY_PAD`,
-`KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PLOT`, `LOGVIEW`,
-`PRESET_BAR`, `PANEL`, `SCROLL`, `ICON` - builds one `Widget` and returns a
-`HostHandle(kind="widget")` the script holds onto. `WIDGET(kind, ...)` is
-the generic form every catalog helper wraps, and it is how a kind with no
-sugar word of its own is built - `WIDGET("logview")` and `WIDGET("plot")`
-are the same widgets `LOGVIEW(label)` and `PLOT(label)` build.
+`TOGGLE`, `METER`, `NUMBER`, `VSLIDER`, `KNOB`, `RADIO`, `DROPDOWN`,
+`XY_PAD`, `KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PLOT`,
+`LOGVIEW`, `PRESET_BAR`, `PANEL`, `SCROLL`, `ICON`, `GROUP` - builds one
+`Widget` and returns a `HostHandle(kind="widget")` the script holds onto.
+`WIDGET(kind, ...)` is the generic form every catalog helper wraps, and it is
+how a kind with no sugar word of its own is built - `WIDGET("logview")` and
+`WIDGET("plot")` are the same widgets `LOGVIEW(label)` and `PLOT(label)` build.
 
 ## Props
 
@@ -327,6 +327,87 @@ cells only while a drag is in progress, and the rectangles it draws are read out
 the same rows a `GET` answers with. A panel's face still paints its own label when
 it grows this ability, since registering a face replaces that call rather than
 adding to it.
+
+## Groups
+
+`GROUP("carrier", deck)` is a section of a page: a band with a word on it and a
+body the controls live in. The kind is a panel (`base="panel"`), so it clips, holds
+children and is arranged exactly as one is - but a script never sees the two panels
+it is built out of. `"{name}#header"` and `"{name}#body"` are made by the tree, and
+`NODE_ADD(g, w)` hands `w` to the body through the same `content_child` rule a
+viewport uses, so the header is not something a script has to dodge and the clip,
+the hit test, the tree walk and the paint order still see one real child each.
+
+| Prop        | Read as                                              |
+| ----------- | ---------------------------------------------------- |
+| `title`     | the word drawn in the band; empty falls back to the widget's own `label`, and a group with neither draws no word at all |
+| `folded`    | 1 shows the band alone. Written by the chevron, by `GROUP_FOLD` and by `SET(g, "folded", 1)` - three spellings of one prop |
+| `foldable`  | whether the band offers the fold at all: off draws no chevron and a click where it used to be folds nothing |
+| `accordion` | on the panel that *holds* the groups: opening one folds its siblings, so the page is always one section tall |
+| `dockable`  | that this group may be picked up by its band and dropped into a cell of a `dockable` grid |
+| `cell`      | which cell of its panel's grid it was arranged into, counted from 0; `-1` until a pass has measured one, and read-only after that |
+| `order`     | where it stands among its siblings, which is the order a stack, a column or a grid lays them out in; read-only |
+
+**A fold is a measurement, not a memory.** A group is as tall as its band plus what
+its body holds - the bottom of the rows inside it, read the way
+:mod:`crude.ui.scroll` reads a viewport - so a group of three 30 px knobs is 132
+logical pixels tall (`24` band, `9` of skin inset twice, `90` of knobs) and folded
+is 42, and opening it again needs nothing remembered. The same rule answers the
+other case: a group whose height belongs to its container - packed `fill` or `grow`,
+or glued on `top` and `bottom` - keeps that height when it folds, because the body
+is hidden and collapsed while the cell is nobody else's to resize. `GROUPS(g)` lists
+the groups inside a group, and a nested group that was folded stays folded when its
+parent opens: `visible` is written on the body, and the pass never reaches past it.
+
+`accordion` is the one row read on a widget other than the one it names. "Opening
+one closes its siblings" is a statement about a set, and a nested group's parent is
+an ordinary body panel that was never asked to be anything, so the rule lives on the
+holder. It fires when something *opens*: a fold that folded every other group on the
+page would be a gesture nobody made.
+
+**The order is the arrangement.** `GROUP_MOVE(g, 0)`, `GROUP_UP(g)` and `GROUP_DOWN(g)`
+re-order the children of the panel the group lives in, and that list *is* the order a
+`VSTACK`, an `HSTACK` and a `GRID` read, so a move is a re-arrange on the next pass
+and there is no second order to keep in step. A position past either end is clamped
+and answered with the place it took, because a script restoring a saved layout has no
+idea how many sections a page has. `order` reads that place back, and it survives
+being handed to another panel: the position is where the widget stands in the list
+its own container arranges from.
+
+**Docking is the grid's arithmetic, not a new one.** `GRID(deck, 3, 18, ["dockable", 1])`
+makes a panel offer its cells; a group that says `dockable` is captured by a press on
+its band, the cell under the pointer is `index_at`'s answer, and the release writes
+the claim the next pass draws. A cell holds one group: `GROUP_DOCK` refuses a taken
+cell, an unknown number, a panel with no cells and a group that never said it could
+be carried, each by name, while a pointer gets the answer a hand can read - a drop
+onto a taken cell moves nothing at all. `GROUP_UNDOCK(g)` gives up the claim and
+leaves the parentage alone, so the group takes the next free cell its order in the
+list comes to, the same rule a new child follows. The cells counted are the children
+extended by whatever somebody claimed, which is why four groups in three columns is
+six cells and one of them is somewhere to drop: the number is read from the declared
+grid before any frame has measured it, so a `GROUP_DOCK` on the line after a `GRID`
+is not a panel with no cells.
+
+The band is drawn by the group's own face - plate, title, one chevron, and a rule
+under the band that an open group has and a folded one does not, because there is
+nothing under a band with no body. The `#header` panel is invisible with role
+`caption` on purpose: :meth:`~crude.ui.widget.Widget.hit` skips an invisible child,
+so a press in the band is claimed by the group, the one widget with a behaviour for
+it, and there is no event forwarding anywhere in :mod:`crude.ui.group`. The two
+chevrons are the atlas's own `chevron-d` and `chevron-r`, one per state.
+
+Two facts a script has to know to get a box it can see. The pass is
+:meth:`~crude.ui.context.UIContext.layout`, which is what the frame calls: stacks,
+anchors, folds and the `cell`/`order` rows are all answered there, so a number read
+before a layout is a number that has not been measured yet. And a row or a grid
+*inside* a body settles on the second frame, because the body's width comes from the
+anchors - the last sweep - while its rows are arranged in the second. Finally, a
+dockable group wants `PACK(g, "fill", "fixed")`: a cell gives a `fixed` child only
+the size it already has, so a group with no width of its own is drawn no width, and
+its band is a band nothing can be grabbed from.
+
+Like `scroll`, a group has no Pd twin: `pd_object` stays empty, `PD_EMIT` never
+writes one, and a plain panel has no `folded` row to be refused one.
 
 ## Menus and dialogs
 

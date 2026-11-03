@@ -97,6 +97,20 @@ from ..ui import (
     unstack as layout_unstack,
     vstack as layout_vstack,
 )
+# the group verbs, each one a call into :mod:`crude.ui.group`: a fold, an order and
+# a cell are that module's own answers and nothing below is worked out twice. The
+# names are read through ``crude.ui`` like every other UI name, because a binding
+# imports the package and never the module behind it.
+from ..ui import (
+    dock as group_dock,
+    fold as group_fold,
+    groups_of,
+    is_group,
+    move_by as group_move_by,
+    move_to as group_move_to,
+    order_of as group_order,
+    undock as group_undock,
+)
 from .core import own_props
 from .handles import values_from
 from .registry import Binding, REGISTRY, binding
@@ -117,14 +131,16 @@ STYLE_PROPS = ("role", "size", "glyph", "glyph_on", "glyph_off", "tooltip")
 
 #: the catalog kinds that come with a constructor of their own. Every entry is
 #  sugar over ``WIDGET``; the slots map onto the kind's own ``args``, except for
-#  the two words the plan spells differently from the table:
+#  the three words the plan spells differently from the table:
 #
 #  * ``TOGGLE(label[, on])`` - ``on`` is the latched *value*, which is a 0/1 row
 #    no table can name "on" without restating what a toggle holds;
 #  * ``ICON(name, size)`` - ``name`` is the ``glyph`` row (the kind's own first
 #    ``args`` entry) and ``size`` is the box it is drawn in, which is placement
 #    rather than a prop: it lands as the widget's own box and any later
-#    ``PLACE`` overrules it, which is the plan's one answer for size.
+#    ``PLACE`` overrules it, which is the plan's one answer for size;
+#  * ``GROUP(title[, parent])`` - ``title`` is a row and ``parent`` is not: it is
+#    the widget the section is built inside, which no prop table can hold.
 CONSTRUCTORS: dict = {
     name: (kind, tuple(KINDS[kind].args), len(KINDS[kind].args))
     for name, kind in (
@@ -147,6 +163,13 @@ CONSTRUCTORS: dict = {
 }
 CONSTRUCTORS["ICON"] = ("icon", ("glyph", "size"), 1)
 CONSTRUCTORS["TOGGLE"] = ("toggle", ("label", "on"), 1)
+# ``GROUP(title[, parent])`` - the section of a page, named by the word in its
+# header. ``parent`` is the second slot rather than a prop: it is the widget the
+# group is built *inside*, which is a place in the tree and not a value on it, and
+# leaving it out puts the group where every other constructor puts a widget - in the
+# scene on screen. The kind's own ``args`` are just ``title``, so this is the third
+# word whose slots the table cannot spell out on its own.
+CONSTRUCTORS["GROUP"] = ("group", ("title", "parent"), 1)
 
 #: the words ``TOGGLE(label, on)`` reads as on and off, the same list
 #  :mod:`crude.ui.props` settles a bool prop with
@@ -270,14 +293,16 @@ def _construct(ctx, kind_name: str, arg_names):
     Every catalog constructor funnels here, so a kind is added in exactly one
     place: the table (:attr:`Kind.args`) decides both the argument names and the
     props they land on, and an omitted argument simply is not written, leaving
-    the row at the default the same table declares. The two slots the table
-    cannot name - a toggle's ``on``, an icon's ``size`` - are translated here
-    and nowhere else, which is what keeps the plan's constructor-equals-``SET``
-    rule true for every kind that needs no translation at all.
+    the row at the default the same table declares. The three slots the table
+    cannot name - a toggle's ``on``, an icon's ``size``, a group's ``parent`` -
+    are translated here and nowhere else, which is what keeps the plan's
+    constructor-equals-``SET`` rule true for every kind that needs no translation
+    at all.
     """
     window = _window(ctx)
     values = {}
     box = None
+    holder = None
     for name in arg_names:
         if not ctx.has(name):
             continue
@@ -323,6 +348,12 @@ def _construct(ctx, kind_name: str, arg_names):
             side = max(0.0, float(given))
             box = (0.0, 0.0, side, side)
             continue
+        if name == "parent":
+            # the widget this one is built inside, which is a place in the tree
+            # rather than a row on it: ``NODE_ADD`` is the same call on a widget
+            # that has already been made, and the two share the refusal below
+            holder = _as_python(ctx, "parent", Widget, "a widget handle")
+            continue
         values[name] = given
     name = ""
     for word in arg_names:
@@ -334,7 +365,14 @@ def _construct(ctx, kind_name: str, arg_names):
         held = Widget(kind_name, values, name=name)
         if box is not None:
             held.place(*box)
-        window.add(held)
+        if holder is not None:
+            # into the panel the script named, and stamped with the scene it was
+            # said in, which is what :meth:`~crude.ui.context.UIContext.add` would
+            # have done: a section built into a scene must leave the window with it
+            holder.add(held)
+            window.workspaces.claim(held)
+        else:
+            window.add(held)
     except UIError as exc:
         _fail(ctx, exc)
     return _handle(held)
@@ -769,6 +807,182 @@ def unstack(ctx):
     except UIError as exc:
         _fail(ctx, exc)
     return Number(1 if gone else 0)
+
+
+# -- groups: a titled section of a page ---------------------------------
+
+
+def _as_group(ctx, arg_name: str) -> Widget:
+    """A widget handle that is a group, refused by the kind it is instead.
+
+    The question is the inheritance chain's rather than the kind name's, so a
+    script's ``WIDGET_DEFINE("section", "group")`` takes every verb below exactly
+    as the catalog kind does - and a plain panel is refused by the name it has,
+    rather than failing somewhere inside a fold it was never given.
+    """
+    held = _as_widget(ctx, arg_name)
+    if not is_group(held):
+        raise ctx.fail(f"{ctx.name}: argument '{arg_name}' must be a group "
+                       f"handle, and '{held.path()}' is a '{held.kind.name}'")
+    return held
+
+
+def _count(ctx, arg_name: str) -> int:
+    """An argument that counts things: a whole number, or a refusal that says so.
+
+    The same rule :func:`_column_count` states for a grid: :meth:`int` would
+    truncate ``2.5`` into a cell somebody else decided, and a script that is told
+    its group landed in cell 2 when it asked for 2.5 has been answered for it.
+    """
+    said = ctx.as_number(arg_name)
+    if said != int(said):
+        raise ctx.fail(f"{ctx.name}: '{arg_name}' counts things, so it has to be "
+                       f"a whole number, not {said:g}")
+    return int(said)
+
+
+@binding("GROUP_FOLD", ["group", "folded"], area=AREA, optional=1,
+         doc="Close a group to its header, open it, or leave it out to switch.")
+def group_fold_ctor(ctx):
+    """``GROUP_FOLD(carrier, 1)``: fold it, ``0`` opens it, nothing means the other.
+
+    The prop is written and the box is left to the next pass, which is what makes
+    this, ``SET(g, "folded", 1)`` and a hand on the chevron one gesture with three
+    spellings: how tall a fold leaves the group is measured from the rows its body
+    holds, so a verb that resized the box itself would be a second answer to the one
+    question the layout pass is already asked to answer.
+
+    Answers the state the group is in now, so a bare ``GROUP_FOLD(g)`` can be read
+    back rather than guessed at.
+    """
+    held = _as_group(ctx, "group")
+    wanted = ctx.as_bool("folded") if ctx.has("folded") else None
+    try:
+        group_fold(held, wanted)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(1.0 if bool(held.get("folded")) else 0.0)
+
+
+@binding("GROUP_MOVE", ["group", "position"], area=AREA,
+         doc="Re-order a group among the sections it is drawn with; 0 is first.")
+def group_move(ctx):
+    """``GROUP_MOVE(filter, 0)``: the list an arrangement reads is this list.
+
+    The order among its siblings *is* the order a ``VSTACK``, an ``HSTACK`` and a
+    ``GRID`` lay children out in, so moving in the list is the re-arrange: the next
+    pass draws the boxes in the new order and nobody has to be told a row moved. A
+    position past either end is clamped to the end it is nearer, which is the same
+    answer a hand that drags past the last row gets.
+
+    Answers the position the group is at now, which is the clamped one.
+    """
+    held = _as_group(ctx, "group")
+    wanted = _count(ctx, "position")
+    try:
+        group_move_to(held, wanted)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(float(group_order(held)))
+
+
+def _moved_by(ctx, steps: int) -> Number:
+    """``GROUP_UP`` and ``GROUP_DOWN``: :func:`GROUP_MOVE` at ``±1``.
+
+    One helper because the two are the same call with the sign written the other
+    way round, and an arithmetic kept in two places is two chances to be wrong.
+    """
+    held = _as_group(ctx, "group")
+    try:
+        group_move_by(held, steps)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(float(group_order(held)))
+
+
+@binding("GROUP_UP", ["group"], area=AREA,
+         doc="One place towards the front of the sections it is drawn with.")
+def group_up(ctx):
+    """``GROUP_UP(modulator)``: the order it landed on, not the one it asked for.
+
+    At the front of the list there is no place further to go, and a verb that
+    answered its own arithmetic would report a move that did not happen.
+    """
+    return _moved_by(ctx, -1)
+
+
+@binding("GROUP_DOWN", ["group"], area=AREA,
+         doc="One place towards the back of the sections it is drawn with.")
+def group_down(ctx):
+    """``GROUP_DOWN(modulator)``: ``GROUP_UP`` the other way, same answer."""
+    return _moved_by(ctx, 1)
+
+
+@binding("GROUP_DOCK", ["group", "cell", "panel"], area=AREA, optional=1,
+         doc="Put a group in one numbered cell of a dockable grid.")
+def group_dock_ctor(ctx):
+    """``GROUP_DOCK(carrier, 2)``: the cell it is told is the cell it is drawn in.
+
+    The panel defaults to the one the group already lives in, which is the usual
+    case - a section moved between two cells of the same grid. The cell is the
+    number ``GRID`` counted from 0, and the group, the panel and the cell must all
+    agree about it: a group is picked up only when it says it is ``dockable``, a
+    panel has cells only once a ``GRID`` with ``"dockable", 1`` has measured them,
+    and a cell is free only if nothing is drawn in it.
+
+    Each of those is refused by name, because "why did my group not move" is a
+    question about three separate facts and one error that could mean any of them
+    is a bug report rather than a fix. A pointer gets the situation answered the
+    other way: a drag released over a taken cell moves nothing at all, because the
+    reply a hand can read is the thing not moving.
+
+    Answers the cell now held, which is the one ``GET(g, "cell")`` reads back.
+    """
+    held = _as_group(ctx, "group")
+    cell = _count(ctx, "cell")
+    panel = (_as_python(ctx, "panel", Widget, "a widget handle")
+             if ctx.has("panel") else None)
+    try:
+        group_dock(held, cell, panel)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(float(held.get("cell")))
+
+
+@binding("GROUP_UNDOCK", ["group"], area=AREA,
+         doc="Give up the cell; the group stays in its panel and takes a free one.")
+def group_undock_ctor(ctx):
+    """``GROUP_UNDOCK(carrier)``: only the claim is dropped, never the parentage.
+
+    Where a group *lives* and which cell it is drawn in are two facts, and a dock
+    wrote only the second. Giving it up leaves the group in the panel and puts it
+    after its siblings, so it takes the next free cell the arrangement has - which
+    is the same rule a new child follows and the reason a ``GROUPS`` list keeps
+    reading in draw order.
+
+    Answers the cell now held: ``-1`` means no cell of its own, until the next pass
+    has arranged the panel it is in.
+    """
+    held = _as_group(ctx, "group")
+    try:
+        group_undock(held)
+    except UIError as exc:
+        _fail(ctx, exc)
+    return Number(float(held.get("cell")))
+
+
+@binding("GROUPS", ["panel"], area=AREA,
+         doc="The groups a panel holds, in the order they are drawn.")
+def groups_ctor(ctx):
+    """``GROUPS(box)``: the array, looked for where an arrangement would put them.
+
+    A group's own children live inside its body, so "the groups this panel holds"
+    is answered by looking in the panel that holds its children - which is what
+    ``VSTACK`` and ``GRID`` arrange, and what lets a ``View`` menu list the sections
+    of a page without knowing whether the page is a plain panel or another group.
+    """
+    held = _as_widget(ctx, "panel")
+    return List([_handle(kid) for kid in groups_of(held)])
 
 
 # -- wire: links --------------------------------------------------------
@@ -1391,6 +1605,8 @@ BINDINGS = (
     "PLACE", "NODE_ADD",
     "ANCHOR", "UNANCHOR", "PACK", "PAD",
     "HSTACK", "VSTACK", "GRID", "UNSTACK",
+    "GROUP_FOLD", "GROUP_MOVE", "GROUP_UP", "GROUP_DOWN",
+    "GROUP_DOCK", "GROUP_UNDOCK", "GROUPS",
     "LINK_VALUE", "LINK_STATE", "UNLINK",
     *(f"ON_{event.upper()}" for event in WIDGET_EVENTS),
     *(f"ON_{event.upper()}" for event in SCRIPT_EVENTS),
