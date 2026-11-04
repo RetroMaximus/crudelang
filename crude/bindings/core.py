@@ -8,6 +8,7 @@ place and answering ``null``). The additions are:
 ``AT``/``SET_AT``             index access (the S12 sugar ``l[i]``/``l[i] = v``
                               parses straight onto these two)
 ``MIN``/``MAX``/``CLAMP``     scalar helpers used by every widget binding
+``FLOOR``/``ROUND``           the two roundings an index needs to be a whole number
 ``STR``/``NUM``               explicit conversions
 
 Every subsystem that has handles owns the two words for its own kind through
@@ -18,6 +19,7 @@ was handed.
 
 from __future__ import annotations
 
+import math
 import os
 
 from ..lang.values import (
@@ -189,6 +191,31 @@ def _clamp(ctx):
     if low > high:
         raise ctx.fail(f"CLAMP: low bound {low} is greater than high bound {high}")
     return Number(min(max(value, low), high))
+
+
+@binding("FLOOR", ["value"])
+def _floor(ctx):
+    """``FLOOR(value)``: the whole number at or below ``value``.
+
+    Down, always, so ``FLOOR(-0.5)`` is ``-1`` - the direction a script needs when
+    it is walking *down* to an index from a division that does not come out even.
+    Answers a whole ``Number``, not a float that merely looks like one, so an
+    ``AT``/``SET_AT`` index built from it is the index it was written as.
+    """
+    return Number(math.floor(ctx.as_number("value")))
+
+
+@binding("ROUND", ["value"])
+def _round(ctx):
+    """``ROUND(value)``: the nearest whole number, exact halves to the even side.
+
+    The same rounding :func:`crude.ui.clip._whole` applies to a sample a marker
+    lands on, and it has to be the same: a clip drag writes a whole sample through
+    that rule, and a knob that read the number back with a different one would
+    disagree with the line it was just shown on the screen.
+    """
+    found = round(ctx.as_number("value"))
+    return Number(0 if found == 0 else found)
 
 
 @binding("STR", ["value"])

@@ -393,5 +393,30 @@ class PdSession:
     def array_size(self, patch: PdPatch, name: str) -> int:
         return self.lib.array_size(self.array_name(patch, name))
 
+    def resize_array(self, patch: PdPatch, name: str, size: int) -> int:
+        """Grow or shrink a table in place, and answer the size it has now.
+
+        The name goes through :meth:`array_name` like every other array call, so a
+        table authored as ``$0-sample`` is resized by the word ``sample``. It has to
+        *exist* first: ``libpd_resize_array`` on a symbol with no array behind it is
+        a silent failure in one build and a new table in another, and a script that
+        thought it had resized something would be wrong either way. So the refusal
+        names the array, and the size that comes back is the array's own answer
+        rather than the number that was asked for.
+
+        Growing keeps what was already there (Pd resizes in place), which is what
+        lets a recorder load a longer take into the table a patch is reading.
+        """
+        resolved = self.array_name(patch, name)
+        if self.lib.array_size(resolved) < 0:
+            raise PdError(f"array '{name}' is not on patch "
+                          f"'{getattr(patch, 'id', '?')}' - resize an existing "
+                          f"table, not a name")
+        status = self.lib.resize_array(resolved, int(size))
+        if status != 0:
+            raise PdError(f"array '{name}' refused a resize to {size} "
+                          f"(status {status})")
+        return self.lib.array_size(resolved)
+
     def __repr__(self):
         return f"<PdSession patches={sorted(self.patches)} dsp={self.dsp_on}>"

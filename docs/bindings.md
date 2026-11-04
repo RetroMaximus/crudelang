@@ -64,7 +64,7 @@ IS_LIST(value)         IS_FUNC(value)      TYPE_OF(value)
 APPEND(list, value)    POP(list, index)    EXTEND(listA, listB)
 LEN(value)             AT(value, index)    SET_AT(value, index, element)
 MIN(a, b)              MAX(a, b)           CLAMP(value, low, high)
-NUM(value)             STR(value)
+FLOOR(value)           ROUND(value)       NUM(value)             STR(value)
 SLEEP(seconds)
 ```
 
@@ -77,6 +77,15 @@ and the brackets are the same binding. `MIN`, `MAX`, `CLAMP`, `NUM`,
 `SLEEP(seconds)` on a :class:`FakeClock` in a test moves virtual time and
 returns without waiting for a real millisecond.
 
+`FLOOR` and `ROUND` are the two ways a division becomes an index. The language
+has no integer type, so `len / 100` is a float and `AT` would take its chances
+with whatever the binary answer came out as; `FLOOR` always goes down -
+`FLOOR(-0.5)` is `-1` - and `ROUND` goes to the nearest whole, exact halves to
+the even side, which is the same rounding a clip marker is written with, so a
+knob and the line drawn on the screen cannot disagree about which sample a
+number names. Both answer a whole number, not a float that merely looks like
+one.
+
 ## Project
 
 `MODE()` says which of `terminal`/`headless`/`window` this run landed on;
@@ -84,14 +93,17 @@ returns without waiting for a real millisecond.
 `EXIT(code)` raises an `ExitRequest` the loop catches on the way out.
 `RES(id)` looks a declared resource up in the project's resource table
 (`GET(RES("sqr"), "values")` is how `fm_synth` reads one of its arrays), and
-`PRESET_LOAD(name)`/`PRESET_SAVE(name, values)` are the two halves of a
-preset file. `WIDTH(w)`/`HEIGHT(w)` read a widget's - or the painter's own canvas's -
+`RESOURCES([kind])` answers the ids that table holds - all of them, or only the
+ones of `image`/`sound`/`array`/`preset` - so a menu can list the files the
+manifest declares instead of a list typed next to it. Asking for a kind that is
+not one of those four is refused with the four named. `PRESET_LOAD(name)` and
+`PRESET_SAVE(name, values)` are the two halves of a preset file. `WIDTH(w)`/`HEIGHT(w)` read a widget's - or the painter's own canvas's -
 box, the number a script scales to without a hard-coded constant. `RUN(fn)`
 loads another `.crude` script by path and runs it in-process.
 
 ```
 MODE()   FPS()   TIME()   WIDTH(w)   HEIGHT(w)   EXIT(code)
-RES(id)   PRESET_LOAD(name)   PRESET_SAVE(name, values)   RUN(fn)
+RES(id)   RESOURCES([kind])   PRESET_LOAD(name)   PRESET_SAVE(name, values)   RUN(fn)
 ```
 
 ## Pd
@@ -111,7 +123,8 @@ PD_SEND(patch, receiver, value)             PD_SEND_BANG(patch, receiver)
 PD_SEND_LIST(patch, receiver, list)         PD_SEND_MSG(...)
 PD_ARRAY_READ(patch, name, start, count)
 PD_ARRAY_WRITE(patch, name, values)         PD_ARRAY_SIZE(patch, name)
-PD_DSP(on_off)                              PD_SEED(patch, name, values)
+PD_ARRAY_RESIZE(patch, name, size)          PD_SEED(patch, name, values)
+PD_DSP(on_off)
 PD_SAVE(patch, path)                        PD_DUMP(patch)                  PD_INSPECT(patch)
 PD_UNLINK(...)                              PD_BOXES(patch)                 PD_KINDS()
 ```
@@ -150,6 +163,15 @@ Every `PD_SEND` is enqueued to `PdInbox` and delivered on the next
 call it from inside a `sounddevice` callback without tripping the control
 plane. `ON_PD` handlers are dispatched in the same tick, and they get the
 interpreter thread back, so calling `PD_SEND` from inside one is safe.
+
+A table is authored at a size (`PD_TABLE(patch, name, size, x, y)`) and
+`PD_ARRAY_RESIZE` changes it afterwards: the array is grown or shrunk in place,
+whatever it already held up to the new length stays, and the answer is the size
+the array has now, read back off Pd rather than the number that was asked for.
+A name with no array behind it is refused by name - a script that thought it had
+resized something would otherwise be carrying a table that was never there - and
+so is a size below one sample. That verb is how a recorder fits a patch's sample
+table to a file whose length nobody knew when the patch was written.
 
 ## Audio
 
@@ -355,7 +377,7 @@ owns the full block grammar.
 State a handler was never handed:
 
 ```
-MOD_HELD(word)
+MOD_HELD(word)                     SENDER()
 ```
 
 `MOD_HELD("shift")` answers `1` while that key is down and `0` while it is not,
@@ -368,6 +390,19 @@ selected, a face that paints differently while control is down - has no
 argument holding that word, and a project that wrote `0x0001` for it would
 break the day the mask moves. With no window attached the answer is `0`: a
 headless run has nothing to ask.
+
+`SENDER()` answers the widget the handler now running was registered on, or
+`null` when no handler is running. A handler is handed a value, a prop name, a
+pointer - never the widget itself, because when one `ON_CHANGE` is written once
+and put on a hundred widgets the hundred calls are literally the same function.
+That is fine for a page of one-off controls and impossible for a builder that
+makes a row per track: the row has to know which row it is. So a script walks
+the arrays it built and compares each handle with `SENDER()` - handles are
+compared by what they point at, so `AT(clips, i) == SENDER()` is an identity
+test, not a name match. During a nested call (a painter fired from inside a
+frame handler) the answer is the *inner* registration, the one whose arguments
+are on the way in; a widget's own `ON_FRAME` is registered on no widget and
+answers `null`.
 
 Painter ops (the `P_*` names a custom kind's `ON_PAINT` uses):
 

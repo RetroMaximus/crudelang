@@ -244,7 +244,9 @@ never emitted to a `.pd` file.
 :mod:`crude.ui.clip`'s `sample_at` and `pixel_of` - that the face, the pointer
 and a script's `GET` all read, so a mark a hand closes on is the mark the eye
 was shown and the window a hand dragged is the window `GET(c, "start")` answers
-with.
+with. The worked example is `examples/sound_recorder`: a clip per track, four
+marks wired to four knobs as two coarse/fine pairs, and the coarse step the
+script re-reads whenever the take changes.
 
 | Prop       | Read as                                              |
 | ---------- | ---------------------------------------------------- |

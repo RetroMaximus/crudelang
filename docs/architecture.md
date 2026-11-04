@@ -153,7 +153,7 @@ crash.
 | ``crude/runtime``    | ``Clock``, ``Runtime``, the mode table                  |
 | ``crude/cli``        | argparse, the command registry, the exit codes          |
 | ``crude/commands``   | one file per subcommand: ``run``, ``check``, ``init``   |
-| ``examples``         | the four projects the plan's acceptance line names      |
+| ``examples``         | the five worked examples, four of them the plan's       |
 | ``tests/<area>``     | fakes and asserts, one directory per layer above        |
 
 Each of those areas has its own doc under ``docs/`` where the plan says so.

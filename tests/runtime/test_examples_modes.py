@@ -1,10 +1,12 @@
-"""The plan's S11 acceptance line: four examples, three modes, twelve green runs.
+"""The plan's S11 acceptance line: every example, every mode, all green.
 
 S5 pinned that every example *checks*; S8 and S10 pinned what each one's
 runtime halves do on their own; S11 has to say the loop actually enters,
 paces, and shuts down whatever the manifest asks for. The matrix here is
 the honest reading of the plan's line - "4 examples × 3 modes; default
-marker set fully green" - and every cell goes through the same
+marker set fully green", with one example more than the plan counted because
+``sound_recorder`` landed after S11 and joins the matrix rather than getting a
+table of its own - and every cell goes through the same
 :func:`crude.cli.main` the person at the terminal hits:
 
     python -m crude run <example> --mode <terminal|headless|window> \
@@ -19,7 +21,7 @@ and ``--frames 0`` bounds the loop before a single tick is pumped. The
 the loader opens it on the loop the ``SERIAL_OPEN("arduino")`` call in
 ``main.crude`` looks up by id, without a real ``COM3`` anywhere.
 
-What the twelve cells assert is not "the mode did something" - the loop
+What the fifteen cells assert is not "the mode did something" - the loop
 bounded at zero frames is the plan's CI shape, and its honest answer is
 "the mode came up, ran the script, and shut everything down cleanly".
 Every one of them is :data:`crude.cli.EXIT_OK`, and every one of them
@@ -45,7 +47,8 @@ from crude.ui.recording import RecordingRenderer
 #: the repository's ``examples/`` directory, whatever the tests are run from
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
-NAMES = ("hello_terminal", "metronome", "fm_synth", "sensor_bridge")
+NAMES = ("hello_terminal", "metronome", "fm_synth", "sensor_bridge",
+         "sound_recorder")
 MODES = ("terminal", "headless", "window")
 
 
@@ -170,7 +173,7 @@ def window_opened(monkeypatch):
     return opened
 
 
-# -- the twelve cells: every example in every mode ----------------------
+# -- the fifteen cells: every example in every mode ---------------------
 
 
 def _run(path: str, mode: str, extra: List[str] = None) -> int:
@@ -264,6 +267,26 @@ def test_the_sensor_cell_finds_its_link_by_id_on_the_loop(copied, nolib,
     # the script's SERIAL_OPEN("arduino") picked up the loop:// link the
     # manifest declared, and the log the script says is on stdout
     assert "sensor-bridge: headless at 50 fps" in out
+
+
+def test_the_sound_recorder_cell_loads_the_take_the_manifest_declares(copied,
+                                                                      nolib,
+                                                                      window_opened,
+                                                                      capsys):
+    """A cell with an input and no card: the take still arrives.
+
+    ``--no-audio`` costs the recorder its stream and nothing else - the opening
+    line reads the declared wav through the same codec a device run uses, puts it
+    on the selected row and gives the four knobs that row's ruler - so the cell
+    can be read as the example's own report of what it found.
+    """
+    path = copied("sound_recorder")
+
+    assert _run(path, "headless") == EXIT_OK
+
+    out, _ = capsys.readouterr()
+    assert "loaded tone - 88200 samples at 44100 Hz onto 1 track(s)" in out
+    assert "sound-recorder: 5 tracks, 1 declared sound(s), step 882" in out
 
 
 def test_the_metronome_cell_in_terminal_still_runs_the_widget_tree(copied,

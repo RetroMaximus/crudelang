@@ -129,7 +129,7 @@ _EXPECTED_BINDINGS = (
     "ON_RELEASE", "ON_CLICK", "ON_FOCUS", "ON_BLUR", "ON_KEY",
     "ON_CHAR", "ON_SCROLL", "ON_DRAG", "ON_RESIZE", "ON_DROP", "ON_CLOSE",
     "ON_PAINT", "ON_HIT",
-    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD",
+    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD", "SENDER",
     "WIDTH", "HEIGHT",
     "P_RECT", "P_CIRCLE", "P_ARC", "P_LINE", "P_POLY", "P_TEXT",
     "P_GLYPH", "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",
@@ -203,6 +203,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("OFF_FRAME", ("func",), 1),
     ("OFF", ("widget", "event", "func"), 3),
     ("MOD_HELD", ("word",), 0),
+    ("SENDER", (), 0),
     ("WIDTH", ("what",), 0),
     ("HEIGHT", ("what",), 0),
     ("P_RECT", ("p", "x", "y", "width", "height", "radius", "role"), 2),
@@ -746,6 +747,115 @@ def test_mod_held_refuses_a_word_that_is_not_a_modifier(ui_failure):
     error = ui_failure('MOD_HELD("caps")')
     assert "'caps' is not a modifier" in error
     assert "shift" in error, "the refusal says what the words are"
+
+
+# -- SENDER: the widget a shared handler was registered on --------------
+
+
+def test_sender_answers_the_widget_the_handler_is_registered_on(stage):
+    """One ``FUNC`` on two widgets, and the two calls are literally the same call.
+
+    That is the reason a page built by a function cannot be written at all without
+    this word: the handler is handed a value, a prop name and the pointer, and
+    never the box that moved. ``SENDER()`` is the box.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR who = TEXT("?")\n'
+        'PLACE(who, 200, 0, 100, 20)\n'
+        'VAR a = BUTTON("first")\n'
+        "PLACE(a, 0, 0, 100, 28)\n"
+        'VAR b = BUTTON("second")\n'
+        "PLACE(b, 0, 40, 100, 28)\n"
+        'VAR tell = FUNC() -> SET(who, "label", STR(SENDER()))\n'
+        "ON_CLICK(a, tell)\n"
+        "ON_CLICK(b, tell)\n"
+    )
+    assert error is None, error.as_string()
+    # a handle's own words are its path, so the test asks the tree what it expects
+    # rather than spelling an id no script would type
+    first, _ = program.run("STR(a)")
+    second, _ = program.run("STR(b)")
+
+    ctx.router.click(50, 14)
+    value, error = program.run('GET(who, "label")')
+    assert error is None, error.as_string()
+    assert as_py(value) == as_py(first)
+
+    ctx.router.click(50, 54)
+    value, _ = program.run('GET(who, "label")')
+    assert as_py(value) == as_py(second), "the same handler, a different sender"
+
+
+def test_a_handle_compared_with_sender_is_the_row_that_moved(stage):
+    """The loop a builder writes: walk the arrays and ask which one is talking.
+
+    Handles compare by what they point at, not by name or by path, so
+    ``AT(rows, i) == SENDER()`` is an identity test - which is the whole of how a
+    recorder with four tracks and one ``make_track(i)`` knows whose knob turned.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR which = NUMBER("which", 0, 9, 0)\n'
+        "PLACE(which, 200, 0, 100, 24)\n"
+        'VAR a = BUTTON("first")\n'
+        "PLACE(a, 0, 0, 100, 28)\n"
+        'VAR b = BUTTON("second")\n'
+        "PLACE(b, 0, 40, 100, 28)\n"
+        'VAR tell = FUNC() -> '
+        'SET(which, "value", (a == SENDER()) + 2 * (b == SENDER()))\n'
+        "ON_CLICK(a, tell)\n"
+        "ON_CLICK(b, tell)\n"
+    )
+    assert error is None, error.as_string()
+    ctx.router.click(50, 14)
+    value, error = program.run('GET(which, "value")')
+    assert error is None, error.as_string()
+    assert as_py(value) == 1.0
+    ctx.router.click(50, 54)
+    value, _ = program.run('GET(which, "value")')
+    assert as_py(value) == 2.0
+
+
+def test_sender_is_null_when_no_handler_is_running(stage, ui_failure):
+    """Outside a handler there is no sender, and null is the truth, not a guess.
+
+    A script that called ``SENDER()`` from top-level code would otherwise be handed
+    whatever widget last moved - a value that looks like an answer and is a bug.
+    """
+    program, _, _ = stage
+    value, error = program.run("SENDER()")
+    assert error is None, error.as_string()
+    assert as_py(value) == 0
+    assert "must be a handle" in ui_failure('GET(SENDER(), "label")')
+
+
+def test_a_frame_handler_has_no_widget_to_name(stage):
+    """``ON_FRAME`` belongs to the tick and not to a box, so its sender is null.
+
+    The frame registration is stored with no widget on purpose; a handler that
+    covered the whole window and answered the root panel would be naming a widget
+    nobody registered it on.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR who = TEXT("-")\n'
+        "PLACE(who, 0, 0, 100, 20)\n"
+        'ON_FRAME(FUNC() -> SET(who, "label", STR(SENDER())))\n'
+    )
+    assert error is None, error.as_string()
+    ctx.frame(dt=0.016)
+    value, err = program.run('GET(who, "label")')
+    assert err is None, err.as_string()
+    assert as_py(value) == "0", "null printed as the number it is"
+
+
+def test_sender_answers_null_when_there_is_no_window():
+    """A headless run has no handlers to be inside, and says so without failing."""
+    value, error = Program("<ui-test>",
+                           host=types.SimpleNamespace()).run("SENDER()")
+    assert error is None, error
+    assert as_py(value) == 0
 
 
 # -- style --------------------------------------------------------------

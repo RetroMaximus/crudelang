@@ -253,6 +253,11 @@ class Handlers:
         self.fired = 0
         self.muted = 0
         self._depth = 0
+        #: the widget each running handler was registered on, outermost call first.
+        #  A list rather than one slot because a handler may fire another - a
+        #  painter called from inside a ``ON_FRAME`` - and the inner one is the
+        #  sender while it runs. :meth:`sender` reads the end of it.
+        self._senders: List[Optional[Widget]] = []
 
     # -- wiring ---------------------------------------------------------
     def attach_program(self, program: Any) -> None:
@@ -545,6 +550,20 @@ class Handlers:
         """Run the ``ON_FRAME`` handlers with this tick's seconds; how many did."""
         return self.fire(None, FRAME, float(dt))
 
+    def sender(self) -> Optional[Widget]:
+        """The widget the handler now running was registered on, or ``None``.
+
+        :meth:`fire` hands a handler its value, its prop and its event, and never
+        the widget - a ``FUNC(v)`` on a slider and a ``FUNC(v)`` on a knob are told
+        the same way. A script that builds one row out of one function therefore
+        has four identical handlers and no way to say which row made the call, so
+        the widget the registration belongs to is kept on a stack for the length of
+        the call and answered here. Outside any handler the answer is ``None``,
+        which is the truth rather than a guess, and a frame handler's is too: it
+        was registered on no widget.
+        """
+        return self._senders[-1] if self._senders else None
+
     def _invoke(self, handler: Handler, args: Tuple[Any, ...]) -> bool:
         """One call, answered with whether it worked - the count ``fire`` keeps."""
         return self._call(handler, args)[0]
@@ -568,6 +587,10 @@ class Handlers:
         value: Any = None
         error: Any = None
         invoke = getattr(self.program, "invoke", None)
+        # the widget this registration belongs to, for the length of the call only:
+        # ``SENDER()`` reads the end of the stack, and a handler that fires another
+        # sees the inner registration while it runs and this one afterwards
+        self._senders.append(handler.widget)
         try:
             if callable(invoke):
                 value, error = invoke(handler.func, list(said))
@@ -575,6 +598,8 @@ class Handlers:
                 value = handler.func(*said)
         except Exception as exc:  # a script handler must not outlive the frame
             error = exc
+        finally:
+            self._senders.pop()
 
         if error is None:
             handler.errors = 0

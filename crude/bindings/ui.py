@@ -1179,6 +1179,34 @@ def mod_held(ctx):
     return Number(1 if mods & mask else 0)
 
 
+@binding("SENDER", [], area=AREA,
+         doc="The widget the handler now running was registered on.")
+def sender(ctx):
+    """``SENDER()``: which of a hundred widgets made this call.
+
+    An event hands its handler a value, a prop name and the event's own numbers, and
+    never the widget - which is fine for one control and impossible for a page built
+    by one function. A recorder that makes four tracks with ``make_track(i)``
+    registers the same ``FUNC`` on four knobs, and the handler has to know which row
+    turned: ``SET(AT(KNOBS, track_of(SENDER())), ...)`` is the whole answer, and the
+    alternative is four copies of the row.
+
+    Outside a handler - in the script's own top-level code, or in a function that
+    code called - there is no sender, and this answers ``NULL`` rather than the last
+    widget that happened to move. A handler registered on the frame has no widget
+    either, for the same reason: ``ON_FRAME`` belongs to the tick and not to a box.
+    A run with no UI at all answers ``NULL`` too, the way ``MOD_HELD`` answers ``0``
+    when there is no keyboard to ask - ``NULL`` is the truth, and an error would be
+    a script that cannot be run headless.
+    """
+    window = getattr(ctx.host, "ui", None)
+    handlers = getattr(window, "handlers", None)
+    held = handlers.sender() if handlers is not None else None
+    if held is None:
+        return Number.null
+    return _handle(held)
+
+
 # -- paint: the primitives an ON_PAINT draws with -----------------------
 
 # what every primitive returns. A painter is a list of statements rather than an
@@ -1640,7 +1668,7 @@ BINDINGS = (
     "LINK_VALUE", "LINK_STATE", "UNLINK",
     *(f"ON_{event.upper()}" for event in WIDGET_EVENTS),
     *(f"ON_{event.upper()}" for event in SCRIPT_EVENTS),
-    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD",
+    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD", "SENDER",
     "WIDTH", "HEIGHT",
     "P_RECT", "P_CIRCLE", "P_ARC", "P_LINE", "P_POLY", "P_TEXT", "P_GLYPH",
     "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",

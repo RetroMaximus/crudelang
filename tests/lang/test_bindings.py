@@ -112,6 +112,55 @@ def test_clamp_with_inverted_bounds_is_rejected(failure):
     assert "greater than high bound" in failure("CLAMP(5, 3, 0)").details
 
 
+def test_floor_and_round_turn_a_division_into_an_index(eval_src):
+    """The language has no integer type, so a count divided is a float.
+
+    ``FLOOR`` is the way down to an index and ``ROUND`` is the way to the nearest
+    whole, which is what a sample position, a row number or a byte offset has to
+    be before it can be handed to ``AT``.
+    """
+    assert as_py(eval_src("FLOOR(7 / 2)")) == 3
+    assert as_py(eval_src("FLOOR(8 / 2)")) == 4
+    assert as_py(eval_src("ROUND(7 / 2)")) == 4
+    assert as_py(eval_src("ROUND(3)")) == 3
+
+
+def test_floor_goes_down_across_zero_and_round_goes_to_the_nearest(eval_src):
+    """``FLOOR`` is a floor and not a truncation - the difference is one whole."""
+    assert as_py(eval_src("FLOOR(0.5)")) == 0
+    assert as_py(eval_src("FLOOR(-0.5)")) == -1
+    assert as_py(eval_src("FLOOR(-7 / 2)")) == -4
+    assert as_py(eval_src("ROUND(-0.5)")) == 0, "a whole zero, never -0.0"
+
+
+def test_round_is_the_rounding_a_marker_is_written_with(eval_src):
+    """Exact halves go to the even side, the way :func:`crude.ui.clip._whole` rounds.
+
+    A clip drag writes a whole sample through that rule, so a script that rounds a
+    marker with ``ROUND`` and a widget that wrote it must answer the same sample -
+    two roundings that disagree would be a knob whose number does not match the
+    line drawn on the screen beside it.
+    """
+    assert as_py(eval_src("ROUND(0.5)")) == 0
+    assert as_py(eval_src("ROUND(1.5)")) == 2
+    assert as_py(eval_src("ROUND(2.5)")) == 2
+    assert as_py(eval_src("ROUND(2.4)")) == 2
+    assert as_py(eval_src("ROUND(2.6)")) == 3
+
+
+def test_floor_answers_a_whole_number_not_a_float_that_merely_looks_like_one(eval_src):
+    assert as_py(eval_src("FLOOR(4.0)")) == 4
+    assert as_py(eval_src('TYPE_OF(FLOOR(4.5))')) == "number"
+    # an index is printed as an index: 4, not 4.0, in a status line or a filename
+    assert eval_src('STR(ROUND(4.4))').value == "4"
+    assert eval_src('STR(FLOOR(4.4))').value == "4"
+
+
+def test_floor_and_round_refuse_what_is_not_a_number(failure):
+    assert "must be a number" in failure('FLOOR("2")').details
+    assert "must be a number" in failure('ROUND([2])').details
+
+
 def test_str_and_num_convert(eval_src):
     assert as_py(eval_src("STR(42)")) == "42"
     assert as_py(eval_src("NUM(42)")) == 42

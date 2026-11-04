@@ -1,0 +1,843 @@
+# Sound Recorder - take a sample in, or read one off the disk, mark the part of
+# it that matters, and write that part back as a wav.
+#
+# Five tracks are on the page and every one of them is the same five lines of
+# arithmetic, because every one of them came out of one function. A row is a name
+# bar, a clip, and four knobs - coarse start, fine start, coarse end, fine end -
+# and the coarse/fine pair is the reason a crop can be lined up on a transient:
+# the coarse knob walks the take in hundred-steps and the fine knob walks the
+# last few samples on either side of it, so precision is a second control instead
+# of a smaller range to fight over.
+#
+# A marker is a sample, so a sample index has to be a whole number, and the two
+# things that name one - a knob and a dragged line - have to round the same way.
+# That is why the crop maths here uses FLOOR and ROUND, the two numerics
+# :mod:`crude.ui.clip` rounds its marks with, rather than a division that leaves a
+# float behind and an index that complains about it.
+#
+# Selection is the other half of "one builder, not five copies": a click picks one
+# row, a shift-click adds or removes one, and every edit - a knob, a dragged
+# marker, a recording, a loaded file - is applied to the rows in the selection and
+# to nobody else. Which row a handler ran on is :func:`SENDER`, so the handler
+# written once in the builder still knows whose knob it was handed.
+#
+# Run it:   python -m crude run examples/sound_recorder
+# Check it: python -m crude check examples/sound_recorder
+#           Without a window: python -m crude run examples/sound_recorder \
+#                               --mode headless --frames 3
+#
+# Nothing here plays back. The take goes into the patch's [$0-sample] table on
+# every load, record and selection, which is the table a [tabplay~] would read, so
+# playback is a box added to a patch that is already there rather than a redesign.
+
+VAR p = PD_BUILD("recorder", 720, 260)
+VAR sample = PD_TABLE(p, "sample", 2, 20, 40)
+PD_TEXT(p, "the current take, in the table the patch owns", 20, 20)
+PD_LOAD(p)
+
+# -- the page's numbers -------------------------------------------------
+#
+# One set of constants, because a row is placed out of these and the viewport
+# that shows the rows is sized out of them too: five rows of 136 px in a
+# viewport 556 tall is four and a bit on screen, which is the point of the
+# viewport being the "allowed visible range" rather than a list that grows.
+VAR TRACK_COUNT = 5
+VAR TRACK_W     = 1124
+VAR TRACK_H     = 136
+VAR KNOB_W      = 100
+VAR KNOB_H      = 88
+VAR KNOB_X      = 700
+VAR KNOB_PITCH  = 104
+VAR RECORD_SECONDS = 2
+VAR DRAW_STEP   = 4096
+
+# The knobs are deliberately the small ones in the catalog: a dial is a control a
+# person aims at with a marker line under it, and a 100 x 88 box with its name and
+# its readout both kept *inside* the plate - the default ``label_place`` and
+# ``value_place`` - is a knob whose words are charged for out of the same box the
+# dial is drawn in. Nothing here sets ``label_place`` to "top": words placed
+# outside the plate are the face's overflow, not a strip it reserves, and a panel
+# that is 88 px tall will clip them.
+VAR FLAG_BUILT = ["markers", "record", "load", "save", "select"]
+VAR FLAG_LATER = ["mute", "solo", "mixer", "play"]
+
+# -- the tracks, as lists the builders and the handlers both read -------
+#
+# Ten parallel lists, indexed by track. They are lists rather than five sets of
+# names because a handler is given a widget and has to answer "which track is
+# this?", and that question is a walk over the handles the builder appended.
+VAR ROWS   = []
+VAR BARS   = []
+VAR CLIPS  = []
+VAR KC_S   = []
+VAR KF_S   = []
+VAR KC_E   = []
+VAR KF_E   = []
+VAR TAKES  = []
+VAR RATES  = []
+VAR STEPS  = []
+VAR FLAGS  = []
+VAR SELECTED = []
+VAR SOURCES  = []
+
+#: the script's own state, because a FUNC's ``VAR`` is its own and a frame
+#  handler has to be told things: 0 armed, 1 frames drawn last time
+VAR STATE = [0, 0]
+
+# -- small answers ------------------------------------------------------
+
+FUNC index_of(w, list)
+    VAR i = 0
+    WHILE i < LEN(list) THEN
+        IF AT(list, i) == w THEN RETURN i
+        VAR i = i + 1
+    END
+    RETURN -1
+END
+
+FUNC index_of_number(n, list)
+    VAR i = 0
+    WHILE i < LEN(list) THEN
+        IF AT(list, i) == n THEN RETURN i
+        VAR i = i + 1
+    END
+    RETURN -1
+END
+
+#: empties a list where it stands. ``CLEAR`` is the terminal's "clear the screen"
+#  and takes no list, so the way back to nothing is to take the last element off
+#  until there is no last element left - which is also why a selection can be
+#  rebuilt from the top without a name being re-bound from inside a FUNC.
+FUNC empty(list)
+    WHILE LEN(list) > 0 THEN
+        POP(list, LEN(list) - 1)
+    END
+    RETURN 0
+END
+
+#: which track a handler was registered on. A handle compares by what it points
+#  at, so this is an identity test - and the handle is on the *left* of ``==``,
+#  because a number on the left of a handle is not a question this language
+#  answers.
+FUNC track_of(w)
+    VAR i = 0
+    WHILE i < LEN(CLIPS) THEN
+        IF AT(BARS, i) == w THEN RETURN i
+        IF AT(CLIPS, i) == w THEN RETURN i
+        IF AT(KC_S, i) == w THEN RETURN i
+        IF AT(KF_S, i) == w THEN RETURN i
+        IF AT(KC_E, i) == w THEN RETURN i
+        IF AT(KF_E, i) == w THEN RETURN i
+        VAR i = i + 1
+    END
+    RETURN -1
+END
+
+FUNC has_flag(list, word)
+    VAR i = 0
+    WHILE i < LEN(list) THEN
+        IF AT(list, i) == word THEN RETURN 1
+        VAR i = i + 1
+    END
+    RETURN 0
+END
+
+FUNC wants(i, word)
+    IF i < 0 OR i >= LEN(FLAGS) THEN RETURN 0
+    RETURN has_flag(AT(FLAGS, i), word)
+END
+
+FUNC selected(i)
+    RETURN index_of_number(i, SELECTED)
+END
+
+# -- the builder --------------------------------------------------------
+#
+# One row, built the same way every time, and the only thing a flag changes is
+# whether this row has the control at all. An unknown flag is a bug in whatever
+# called this, so it is refused by name and nothing is built - a half row that
+# quietly lacks a mute button is worse than no row.
+FUNC make_track(index, flags)
+    IF bad_flags(flags) > 0 THEN RETURN null
+
+    VAR word = "take " + STR(index + 1)
+    VAR row  = PANEL("")
+    VAR bar  = BUTTON(word)
+    VAR clip = CLIP("")
+    VAR cs = KNOB("start coarse", 0, 100, 0)
+    VAR fs = KNOB("start fine", -10, 10, 0)
+    VAR ce = KNOB("end coarse", 0, 100, 100)
+    VAR fe = KNOB("end fine", -10, 10, 0)
+
+    PLACE(row, 0, index * TRACK_H, TRACK_W, TRACK_H)
+    PLACE(bar, 8, 6, 150, 26)
+    PLACE(clip, 8, 40, 684, 80)
+    PLACE(cs, KNOB_X, 36, KNOB_W, KNOB_H)
+    PLACE(fs, KNOB_X + KNOB_PITCH, 36, KNOB_W, KNOB_H)
+    PLACE(ce, KNOB_X + KNOB_PITCH * 2, 36, KNOB_W, KNOB_H)
+    PLACE(fe, KNOB_X + KNOB_PITCH * 3, 36, KNOB_W, KNOB_H)
+
+    NODE_ADD(tracks, row)
+    NODE_ADD(row, bar)
+    NODE_ADD(row, clip)
+    NODE_ADD(row, cs)
+    NODE_ADD(row, fs)
+    NODE_ADD(row, ce)
+    NODE_ADD(row, fe)
+
+    SET(bar, "tooltip", word + " - click to select, shift-click to add")
+    SET(clip, "start", 0)
+    SET(clip, "count", 0)
+    SET(clip, "playhead", -1)
+    SET(clip, "follow", 1)
+    SET(clip, "tooltip", "drag a mark, the wheel zooms")
+
+    VAR every = [cs, fs, ce, fe]
+    VAR k = 0
+    WHILE k < LEN(every) THEN
+        SET(AT(every, k), "decimals", 0)
+        VAR k = k + 1
+    END
+
+    APPEND(ROWS, row)
+    APPEND(BARS, bar)
+    APPEND(CLIPS, clip)
+    APPEND(KC_S, cs)
+    APPEND(KF_S, fs)
+    APPEND(KC_E, ce)
+    APPEND(KF_E, fe)
+    APPEND(TAKES, [])
+    APPEND(RATES, 0)
+    APPEND(STEPS, 1)
+    APPEND(FLAGS, flags)
+    APPEND(SOURCES, "empty")
+
+    # a row with no take has no ruler yet: the range a knob answers with is the
+    # length of the sample it is showing, so an empty row is set to the one span
+    # an empty take has rather than left on the 0..100 the constructor needed to
+    # be born with. ``prepare_track`` gives it the real range the day it fills.
+    set_ranges(index)
+
+    IF has_flag(flags, "markers") > 0 THEN
+        ON_CHANGE(cs, knob_moved)
+        ON_CHANGE(fs, knob_moved)
+        ON_CHANGE(ce, knob_moved)
+        ON_CHANGE(fe, knob_moved)
+        ON_CHANGE(clip, marker_dragged)
+    END
+    IF has_flag(flags, "select") > 0 THEN
+        ON_CLICK(bar, choose)
+    END
+    RETURN bar
+END
+
+#: a flag the builder does not know is said out loud, by name, with the flags it
+#  does know and the four it will know later; the answer is how many were bad, and
+#  ``make_track`` builds nothing when it is not zero.
+FUNC bad_flags(flags)
+    VAR i = 0
+    VAR bad = 0
+    WHILE i < LEN(flags) THEN
+        VAR word = AT(flags, i)
+        IF index_of_number(word, FLAG_BUILT) < 0 THEN
+            LOG("make_track: flag '" + word + "' is not built - built: markers, record, load, save, select; on the list for later: mute, solo, mixer, play", "error")
+            VAR bad = bad + 1
+        END
+        VAR i = i + 1
+    END
+    RETURN bad
+END
+
+# -- the crop: four knobs, four marks, one pair of numbers per end ------
+#
+# The knobs are the source of truth and the marks are their picture, in both
+# directions: a knob writes [coarse, coarse+fine, coarse, coarse+fine] onto the
+# clip, and a dragged mark is read back as the same two numbers, with the coarse
+# following the fine one when a hand drags a mark further than one coarse step.
+# The pair can never disagree, because there is only one pair of numbers here.
+FUNC coarse_step(take)
+    VAR n = LEN(take)
+    IF n < 200 THEN RETURN 1
+    RETURN MAX(1, FLOOR(n / 100))
+END
+
+FUNC set_ranges(i)
+    VAR take = AT(TAKES, i)
+    VAR n = LEN(take)
+    VAR hi = MAX(0, n - 1)
+    VAR step = coarse_step(take)
+    SET_AT(STEPS, i, step)
+
+    SET(AT(KC_S, i), "min", 0)
+    SET(AT(KC_S, i), "max", hi)
+    SET(AT(KC_S, i), "step", step)
+    SET(AT(KC_E, i), "min", 0)
+    SET(AT(KC_E, i), "max", hi)
+    SET(AT(KC_E, i), "step", step)
+    SET(AT(KF_S, i), "min", 0 - step)
+    SET(AT(KF_S, i), "max", step)
+    SET(AT(KF_S, i), "step", 1)
+    SET(AT(KF_E, i), "min", 0 - step)
+    SET(AT(KF_E, i), "max", step)
+    SET(AT(KF_E, i), "step", 1)
+    RETURN step
+END
+
+FUNC apply_markers(i)
+    VAR take = AT(TAKES, i)
+    VAR n = LEN(take)
+    IF n < 2 THEN
+        SET(AT(CLIPS, i), "markers", [])
+        RETURN 0
+    END
+    VAR hi = n - 1
+    VAR cs = GET(AT(KC_S, i), "value")
+    VAR ce = GET(AT(KC_E, i), "value")
+    VAR m0 = ROUND(CLAMP(cs, 0, hi))
+    VAR m1 = ROUND(CLAMP(cs + GET(AT(KF_S, i), "value"), 0, hi))
+    VAR m2 = ROUND(CLAMP(ce, 0, hi))
+    VAR m3 = ROUND(CLAMP(ce + GET(AT(KF_E, i), "value"), 0, hi))
+    SET(AT(CLIPS, i), "markers", [m0, m1, m2, m3])
+    RETURN m0
+END
+
+#: the two numbers a pair of marks means: the coarse one, and the fine offset
+#  that stays inside one coarse step by moving the coarse one with it.
+FUNC derive_pair(rough, fine, step, hi)
+    VAR c = ROUND(CLAMP(rough, 0, hi))
+    VAR off = ROUND(fine) - c
+    IF off > step THEN
+        VAR c = ROUND(CLAMP(fine - step, 0, hi))
+        VAR off = ROUND(fine) - c
+    END
+    IF off < 0 - step THEN
+        VAR c = ROUND(CLAMP(fine + step, 0, hi))
+        VAR off = ROUND(fine) - c
+    END
+    RETURN [c, ROUND(CLAMP(off, 0 - step, step))]
+END
+
+FUNC follow_marks(i)
+    VAR marks = GET(AT(CLIPS, i), "markers")
+    VAR take = AT(TAKES, i)
+    IF LEN(marks) < 4 OR LEN(take) < 2 THEN RETURN 0
+    VAR hi = LEN(take) - 1
+    VAR step = AT(STEPS, i)
+    VAR s = derive_pair(AT(marks, 0), AT(marks, 1), step, hi)
+    VAR e = derive_pair(AT(marks, 2), AT(marks, 3), step, hi)
+    SET(AT(KC_S, i), "value", AT(s, 0))
+    SET(AT(KF_S, i), "value", AT(s, 1))
+    SET(AT(KC_E, i), "value", AT(e, 0))
+    SET(AT(KF_E, i), "value", AT(e, 1))
+    RETURN 1
+END
+
+# -- the rule the whole file is built around ----------------------------
+#
+# An edit is applied to the row the hand is on and to every other row in the
+# selection, and to no row outside it. ``BUSY`` is why this cannot feed on
+# itself: the writes below fire the same ``ON_CHANGE`` calls a hand does, and a
+# handler that answered one would mirror a mirror.
+VAR BUSY = [0]
+
+FUNC copy_knobs(from, to)
+    SET(AT(KC_S, to), "value", GET(AT(KC_S, from), "value"))
+    SET(AT(KF_S, to), "value", GET(AT(KF_S, from), "value"))
+    SET(AT(KC_E, to), "value", GET(AT(KC_E, from), "value"))
+    SET(AT(KF_E, to), "value", GET(AT(KF_E, from), "value"))
+    RETURN to
+END
+
+FUNC mirror(from)
+    apply_markers(from)
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        VAR i = AT(SELECTED, k)
+        IF i != from AND i >= 0 AND i < LEN(CLIPS) THEN
+            copy_knobs(from, i)
+            apply_markers(i)
+        END
+        VAR k = k + 1
+    END
+    RETURN 0
+END
+
+FUNC knob_moved(v, name)
+    IF AT(BUSY, 0) > 0 THEN RETURN 0
+    VAR from = track_of(SENDER())
+    IF from < 0 THEN RETURN 0
+    SET_AT(BUSY, 0, 1)
+    mirror(from)
+    SET_AT(BUSY, 0, 0)
+    RETURN from
+END
+
+FUNC marker_dragged(v, name)
+    IF AT(BUSY, 0) > 0 THEN RETURN 0
+    IF name != "markers" THEN RETURN 0
+    VAR from = track_of(SENDER())
+    IF from < 0 THEN RETURN 0
+    SET_AT(BUSY, 0, 1)
+    follow_marks(from)
+    mirror(from)
+    SET_AT(BUSY, 0, 0)
+    RETURN from
+END
+
+# -- takes: in from a file, in from the input, out to a file ------------
+
+FUNC show_table(i)
+    VAR take = AT(TAKES, i)
+    VAR n = LEN(take)
+    IF n < 1 THEN RETURN 0
+    PD_ARRAY_RESIZE(p, "sample", n)
+    PD_ARRAY_WRITE(p, "sample", take)
+    RETURN n
+END
+
+#: a row that has a new take: the clip shows all of it, the knobs are given the
+#  range it is, and the crop starts out as the whole take.
+FUNC prepare_track(i)
+    VAR take = AT(TAKES, i)
+    VAR clip = AT(CLIPS, i)
+    SET(clip, "data", take)
+    SET(clip, "start", 0)
+    IF LEN(take) < 2 THEN
+        SET_AT(STEPS, i, 1)
+        SET(clip, "markers", [])
+        RETURN 0
+    END
+    SET(clip, "count", 0)
+    SET(clip, "playhead", LEN(take) - 1)
+    set_ranges(i)
+    SET(AT(KC_S, i), "value", 0)
+    SET(AT(KF_S, i), "value", 0)
+    SET(AT(KC_E, i), "value", LEN(take) - 1)
+    SET(AT(KF_E, i), "value", 0)
+    apply_markers(i)
+    RETURN LEN(take)
+END
+
+FUNC name_row(i, word)
+    SET_AT(SOURCES, i, word)
+    SET(AT(BARS, i), "label", word + " " + STR(i + 1))
+    SET(AT(BARS, i), "tooltip", word + " " + STR(i + 1) + " - " + STR(LEN(AT(TAKES, i))) + " samples")
+    RETURN word
+END
+
+#: the take onto the selected rows. Each row is given its own copy of the
+#  samples, because a track that shares a take with another track is a track whose
+#  crop would move the other one.
+FUNC take_in(take, rate, word)
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        VAR i = AT(SELECTED, k)
+        VAR copy = []
+        EXTEND(copy, take)
+        SET_AT(TAKES, i, copy)
+        SET_AT(RATES, i, rate)
+        name_row(i, word)
+        prepare_track(i)
+        IF wants(i, "record") > 0 THEN show_table(i)
+        VAR k = k + 1
+    END
+    paint_selection()
+    RETURN LEN(take)
+END
+
+FUNC load_sound(word)
+    VAR held = RES(word)
+    VAR wav = WAV_READ(GET(held, "path"))
+    VAR frames = take_in(GET(wav, "samples"), GET(wav, "rate"), word)
+    LOG("loaded " + word + " - " + STR(frames) + " samples at " + STR(GET(wav, "rate")) + " Hz onto " + STR(LEN(SELECTED)) + " track(s)")
+    RETURN frames
+END
+
+FUNC crop(i)
+    VAR take = AT(TAKES, i)
+    VAR marks = GET(AT(CLIPS, i), "markers")
+    VAR n = LEN(take)
+    IF n < 2 OR LEN(marks) < 4 THEN RETURN []
+    VAR from = ROUND(CLAMP(AT(marks, 1), 0, n - 1))
+    VAR to = ROUND(CLAMP(AT(marks, 3), from, n - 1))
+    VAR out = []
+    # both marks are *in* the crop, and ``FOR`` stops before the number it is
+    # given, so the end is asked for as one past the last sample wanted
+    FOR k = from TO to + 1 THEN
+        APPEND(out, AT(take, k))
+    END
+    RETURN out
+END
+
+FUNC save_selected()
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        VAR i = AT(SELECTED, k)
+        VAR out = crop(i)
+        IF LEN(out) > 0 THEN
+            VAR path = "samples/take" + STR(i + 1) + ".wav"
+            WAV_WRITE(path, out, AT(RATES, i))
+            LOG("saved " + STR(LEN(out)) + " sample(s) to " + path)
+        END
+        VAR k = k + 1
+    END
+    RETURN LEN(SELECTED)
+END
+
+# -- the selection ------------------------------------------------------
+
+FUNC paint_selection()
+    VAR i = 0
+    WHILE i < LEN(BARS) THEN
+        IF selected(i) >= 0 THEN
+            SET(AT(BARS, i), "role", "selection")
+        ELSE
+            SET(AT(BARS, i), "role", "button")
+        END
+        VAR i = i + 1
+    END
+    VAR last = AT(SELECTED, LEN(SELECTED) - 1)
+    IF last >= 0 AND wants(last, "record") > 0 THEN show_table(last)
+    RETURN LEN(SELECTED)
+END
+
+FUNC select_only(i)
+    empty(SELECTED)
+    APPEND(SELECTED, i)
+    RETURN paint_selection()
+END
+
+FUNC select_all()
+    empty(SELECTED)
+    VAR i = 0
+    WHILE i < LEN(CLIPS) THEN
+        APPEND(SELECTED, i)
+        VAR i = i + 1
+    END
+    RETURN paint_selection()
+END
+
+#: the row a hand just clicked. A plain click is the whole selection again; a
+#  shift-click adds the row or takes it back out, and a selection that a
+#  shift-click has just emptied goes back to the first row rather than leaving
+#  the page with nothing for the next edit to touch.
+FUNC choose()
+    VAR from = track_of(SENDER())
+    IF from < 0 THEN RETURN 0
+    IF MOD_HELD("shift") > 0 THEN
+        VAR at = selected(from)
+        IF at >= 0 THEN
+            POP(SELECTED, at)
+        ELSE
+            APPEND(SELECTED, from)
+        END
+        IF LEN(SELECTED) < 1 THEN
+            APPEND(SELECTED, 0)
+        END
+    ELSE
+        select_only(from)
+    END
+    RETURN paint_selection()
+END
+
+# -- the recording ------------------------------------------------------
+
+FUNC record_on()
+    VAR rec = AUDIO_RECORD_START(RECORD_SECONDS, 0)
+    SET_AT(STATE, 0, 1)
+    SET_AT(STATE, 1, 0)
+    LOG("recording " + STR(RECORD_SECONDS) + " s of input onto " + STR(LEN(SELECTED)) + " track(s) - " + STR(GET(rec, "capacity")) + " frames of room")
+    RETURN 1
+END
+
+FUNC record_off()
+    VAR frames = AUDIO_RECORD_STOP()
+    VAR rec = AUDIO_RECORD()
+    SET_AT(STATE, 0, 0)
+    SET_AT(STATE, 1, 0)
+    take_in(GET(rec, "samples"), GET(rec, "rate"), "live")
+    LOG("recorded " + STR(frames) + " frame(s), overflow " + STR(GET(rec, "overflow")))
+    RETURN frames
+END
+
+FUNC record_toggled(row)
+    IF GET(row, "value") > 0 THEN RETURN record_on()
+    RETURN record_off()
+END
+
+#: the take while it is still arriving. Every ``DRAW_STEP`` frames the clip is
+#  given the whole buffer and the cursor is put on the newest sample, so a person
+#  watching sees the wave grow rather than a plate that fills in at the end - and
+#  the two numbers in ``STATE`` are why this is not a copy of 88 000 floats per
+#  frame.
+FUNC live_take()
+    VAR rec = AUDIO_RECORD()
+    VAR n = GET(rec, "frames")
+    IF n - AT(STATE, 1) < DRAW_STEP THEN RETURN 0
+    SET_AT(STATE, 1, n)
+    VAR take = GET(rec, "samples")
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        VAR i = AT(SELECTED, k)
+        SET_AT(TAKES, i, take)
+        SET_AT(RATES, i, GET(rec, "rate"))
+        # the row says what is on it from the first drawn block, so a bar that
+        # still reads "tone 3" over a take that is arriving cannot happen
+        name_row(i, "live")
+        SET(AT(CLIPS, i), "data", take)
+        SET(AT(CLIPS, i), "count", 0)
+        SET(AT(CLIPS, i), "playhead", MAX(0, n - 1))
+        VAR k = k + 1
+    END
+    RETURN n
+END
+
+# -- the view -----------------------------------------------------------
+
+FUNC set_follow(on)
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        SET(AT(CLIPS, AT(SELECTED, k)), "follow", on)
+        VAR k = k + 1
+    END
+    RETURN on
+END
+
+#: the window back to the whole take. A clip whose window *is* its sample has
+#  nothing to follow, so a zoomed-out recording shows all of what arrived and a
+#  zoomed one slides; this is the row that gets you back to the first of those.
+FUNC show_whole()
+    VAR k = 0
+    WHILE k < LEN(SELECTED) THEN
+        VAR clip = AT(CLIPS, AT(SELECTED, k))
+        SET(clip, "start", 0)
+        SET(clip, "count", 0)
+        VAR k = k + 1
+    END
+    RETURN LEN(SELECTED)
+END
+
+# -- the page -----------------------------------------------------------
+
+VAR tracks = SCROLL("takes")
+SET(tracks, "rows", TRACK_H)
+SET(tracks, "notch", TRACK_H * 2)
+SET(tracks, "bar", 1)
+PLACE(tracks, 16, 44, 1148, 556)
+
+FOR i = 0 TO TRACK_COUNT THEN
+    make_track(i, FLAG_BUILT)
+END
+select_only(0)
+
+VAR scope = WAVEFORM("input")
+VAR meter = METER("peak", 0, 1, 0)
+VAR caption = TEXT("the input, not the output: what is arriving is what a take will be")
+VAR log = LOGVIEW("status")
+
+PLACE(scope, 16, 612, 560, 84)
+PLACE(meter, 584, 612, 96, 84)
+PLACE(caption, 690, 612, 474, 16)
+PLACE(log, 690, 632, 474, 64)
+PACK(scope, "fill", "fixed")
+PACK(meter, "fixed", "fixed")
+PACK(log, "fill", "fill")
+SET(scope, "tooltip", "the last block off the input")
+SET(meter, "tooltip", "peak of the same block")
+
+ANCHOR(tracks, "left", "parent", "left", 16)
+ANCHOR(tracks, "right", "parent", "right", -16)
+ANCHOR(tracks, "top", "parent", "top", 44)
+ANCHOR(tracks, "bottom", scope, "top", -12)
+ANCHOR(scope, "left", "parent", "left", 16)
+ANCHOR(scope, "bottom", "parent", "bottom", -24)
+ANCHOR(meter, "left", scope, "right", 8)
+ANCHOR(meter, "bottom", "parent", "bottom", -24)
+ANCHOR(caption, "left", meter, "right", 10)
+ANCHOR(caption, "right", "parent", "right", -16)
+ANCHOR(caption, "top", "parent", "top", 612)
+ANCHOR(log, "left", meter, "right", 10)
+ANCHOR(log, "right", "parent", "right", -16)
+ANCHOR(log, "bottom", "parent", "bottom", -24)
+SET(caption, "role", "caption")
+
+# -- the help page ------------------------------------------------------
+#
+# Built before the menu bar, because there is no RAISE verb: the order widgets
+# are added in is the order they are drawn in, and the bar has to sit over the
+# page it opens.
+VAR help       = PANEL("")
+VAR help_title = TEXT("SOUND RECORDER - help")
+VAR help_page  = LOGVIEW("help")
+VAR help_close = BUTTON("Close")
+
+VAR words = []
+APPEND(words, "SOUND RECORDER - five tracks, one builder, four markers each")
+APPEND(words, "")
+APPEND(words, "THE ROWS")
+APPEND(words, "take N     the name bar; click selects it, shift-click adds or")
+APPEND(words, "           removes it. Every edit touches the selected rows only.")
+APPEND(words, "wave plot  the take, in samples. Drag a mark to move it, the wheel")
+APPEND(words, "           to zoom about the pointer, drag empty plate to pan.")
+APPEND(words, "knobs      start coarse / start fine / end coarse / end fine. The")
+APPEND(words, "           coarse one walks the take in hundred steps; the fine")
+APPEND(words, "           one walks the samples either side of it, which is how a")
+APPEND(words, "           crop lands on a transient instead of near one.")
+APPEND(words, "")
+APPEND(words, "THE MARKS")
+APPEND(words, "Four lines, numbered 1 to 4: the rough start, the start, the rough")
+APPEND(words, "end and the end. 2 and 4 are what Save WAV cuts between, so what")
+APPEND(words, "you hear back is what the two fine knobs said.")
+APPEND(words, "A mark dragged past one coarse step takes the coarse knob with it,")
+APPEND(words, "so the knobs and the lines on the plate can never disagree.")
+APPEND(words, "")
+APPEND(words, "FILE")
+APPEND(words, "open NAME  loads a sound the manifest declares. Record arms the")
+APPEND(words, "           input for two seconds and puts the take on the selected")
+APPEND(words, "           rows. Save WAV writes samples/takeN.wav at the rate the")
+APPEND(words, "           take was taken at, one file per selected row.")
+APPEND(words, "")
+APPEND(words, "VIEW")
+APPEND(words, "Follow playhead keeps the cursor inside the window by sliding it,")
+APPEND(words, "stopping at either end of the take; the whole take has nothing to")
+APPEND(words, "follow, so Show the whole take is the other half of that row.")
+APPEND(words, "")
+APPEND(words, "WHAT IS NOT HERE")
+APPEND(words, "Nothing plays back yet - the current take is written into the")
+APPEND(words, "patch's [$0-sample] table, which is the table a [tabplay~] would")
+APPEND(words, "read. Mute, solo, a mixer strip and a play button are flags the")
+APPEND(words, "builder names as not built, so a track gets a control by adding a")
+APPEND(words, "word to one function rather than a second copy of a row.")
+SET(help_page, "lines", words)
+
+PLACE(help, 140, 44, 900, 560)
+PLACE(help_title, 12, 12, 876, 22)
+PLACE(help_page, 12, 42, 876, 478)
+PLACE(help_close, 12, 528, 110, 26)
+PACK(help, "fill", "fill")
+PACK(help_page, "fill", "fill")
+NODE_ADD(help, help_title)
+NODE_ADD(help, help_page)
+NODE_ADD(help, help_close)
+SET(help_title, "role", "title")
+ANCHOR(help, "left", "parent", "left", 140)
+ANCHOR(help, "right", "parent", "right", -140)
+ANCHOR(help, "top", "parent", "top", 44)
+ANCHOR(help, "bottom", "parent", "bottom", -96)
+ANCHOR(help_title, "left", "parent", "left", 12)
+ANCHOR(help_title, "right", "parent", "right", -12)
+ANCHOR(help_title, "top", "parent", "top", 12)
+ANCHOR(help_page, "left", "parent", "left", 12)
+ANCHOR(help_page, "right", "parent", "right", -12)
+ANCHOR(help_page, "top", help_title, "bottom", 8)
+ANCHOR(help_page, "bottom", help_close, "top", -10)
+ANCHOR(help_close, "left", "parent", "left", 12)
+ANCHOR(help_close, "bottom", "parent", "bottom", -12)
+SET(help, "visible", 0)
+
+FUNC open_help()
+    SET(help, "visible", 1)
+    SET(help_page, "scroll", LEN(words))
+    RETURN 1
+END
+
+FUNC close_help()
+    SET(help, "visible", 0)
+    RETURN 0
+END
+
+# -- the frame ----------------------------------------------------------
+#
+# The scope and the meter read the *input*, so the page shows what is arriving
+# before anyone arms a recording, and the take is only pulled out of the capture
+# while one is running.
+FUNC status_line()
+    IF LEN(SELECTED) < 1 THEN RETURN "nothing selected"
+    VAR i = AT(SELECTED, LEN(SELECTED) - 1)
+    VAR take = AT(TAKES, i)
+    VAR said = STR(LEN(CLIPS)) + " tracks, " + STR(LEN(SELECTED)) + " selected - "
+    VAR said = said + STR(AT(SOURCES, i)) + " " + STR(i + 1) + ": "
+    VAR said = said + STR(LEN(take)) + " samples at " + STR(AT(RATES, i)) + " Hz"
+    # the crop is named from the marks, not from the take: a recording that is
+    # still arriving has samples on the plate and no marks yet, because the crop
+    # is only laid out when the take stops - which is the same guard ``crop`` uses
+    VAR marks = GET(AT(CLIPS, i), "markers")
+    IF LEN(marks) > 3 THEN
+        VAR said = said + ", crop " + STR(ROUND(AT(marks, 1)))
+        VAR said = said + ".." + STR(ROUND(AT(marks, 3)))
+        VAR said = said + " of step " + STR(AT(STEPS, i))
+    END
+    IF AT(STATE, 0) > 0 THEN
+        VAR said = "RECORDING - " + said
+    END
+    RETURN said
+END
+
+FUNC frame(dt)
+    SET(scope, "data", AUDIO_WAVEFORM(256, 0, "input"))
+    SET(meter, "value", AUDIO_LEVEL(0, "peak", "input"))
+    IF AT(STATE, 0) > 0 THEN live_take()
+    SET(log, "lines", [status_line()])
+    RETURN 0
+END
+ON_FRAME(frame)
+
+# -- the menu -----------------------------------------------------------
+#
+# The open rows are made out of the manifest: one per declared sound, by the name
+# ``RES`` takes. A project that declares a second wav gets a second row without
+# this file being read again, and a project that declares none says so on the
+# status line instead of offering a row that loads nothing.
+VAR bar       = MENUBAR("menu")
+VAR file_menu = MENU(bar, "File")
+VAR view_menu = MENU(bar, "View")
+VAR help_menu = MENU(bar, "Help")
+
+#: the row of an ``open NAME`` menu item. ``MENU_ADD`` registers the function as
+#  the row's own ``ON_CLICK``, so ``SENDER()`` is the row that was picked and the
+#  whole menu needs one function however many files the manifest declares.
+FUNC open_from_menu()
+    VAR which = index_of(SENDER(), OPEN_ROWS)
+    IF which < 0 THEN RETURN 0
+    RETURN load_sound(AT(OPEN_IDS, which))
+END
+
+VAR OPEN_IDS = RESOURCES("sound")
+VAR OPEN_ROWS = []
+VAR i = 0
+WHILE i < LEN(OPEN_IDS) THEN
+    VAR word = AT(OPEN_IDS, i)
+    APPEND(OPEN_ROWS, MENU_ADD(file_menu, "open " + word, open_from_menu))
+    VAR i = i + 1
+END
+IF LEN(OPEN_IDS) < 1 THEN
+    LOG("the manifest declares no sounds, so there is nothing to open", "warn")
+END
+
+VAR rec_row    = MENU_CHECK(file_menu, "Record", 0, FUNC() -> record_toggled(rec_row))
+MENU_ADD(file_menu, "Save WAV", save_selected)
+MENU_AUDIO_DIALOG(file_menu, "Audio devices")
+MENU_ADD(file_menu, "Quit", FUNC() -> EXIT(0))
+
+MENU_ADD(view_menu, "Select every track", select_all)
+MENU_ADD(view_menu, "Select only the first", FUNC() -> select_only(0))
+MENU_ADD(view_menu, "Show the whole take", show_whole)
+VAR follow_row = MENU_CHECK(view_menu, "Follow playhead", 1, FUNC() -> set_follow(GET(follow_row, "value")))
+
+MENU_ADD(help_menu, "Using this recorder", open_help)
+MENU_ADD(help_menu, "Close help", close_help)
+ON_CLICK(help_close, close_help)
+
+# -- the page opens on something to look at -----------------------------
+#
+# The shipped tone, on the first track: a two second note with a click at 0.6 s
+# is a take with an edge in it, which is what a coarse/fine pair is for. The
+# file is declared in the manifest and generated by scripts/make_tone_wav.py, so
+# the wave on screen is a real wav rather than a list of numbers this file made
+# up.
+IF LEN(OPEN_IDS) > 0 THEN
+    load_sound(AT(OPEN_IDS, 0))
+ELSE
+    paint_selection()
+END
+LOG("sound-recorder: " + STR(LEN(CLIPS)) + " tracks, " + STR(LEN(OPEN_IDS)) + " declared sound(s), step " + STR(AT(STEPS, 0)))

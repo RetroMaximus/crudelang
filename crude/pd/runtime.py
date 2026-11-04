@@ -288,6 +288,9 @@ class PdRuntime:
     def array_size(self, patch_id: str, name: str) -> int:
         return self.session.array_size(self.patch(patch_id), name)
 
+    def array_resize(self, patch_id: str, name: str, size: int) -> int:
+        return self.session.resize_array(self.patch(patch_id), name, size)
+
     # -- dsp ------------------------------------------------------------
     def dsp(self, enabled: bool) -> None:
         self.session.dsp(enabled)

@@ -3,9 +3,10 @@
 Three groups, all of them answers about the project rather than about a subsystem:
 
 * **files** - ``RES`` reaches one declared file, by any name the manifest gives it,
-  and ``PRESET_LOAD``/``PRESET_SAVE`` move a pattern in and out of the preset
-  directory the project declared rather than the working directory the run happens
-  to have;
+  and ``RESOURCES`` says which names there are, so a menu can list the project's
+  own sounds instead of a list somebody typed next to the manifest. ``PRESET_LOAD``
+  and ``PRESET_SAVE`` move a pattern in and out of the preset directory the project
+  declared rather than the working directory the run happens to have;
 * **time** - ``TIME``, ``SLEEP`` and ``FPS`` go through the project's
   :class:`~crude.runtime.clock.Clock`, which is what lets a test drive a whole
   script without a second of real waiting;
@@ -191,6 +192,29 @@ def res(ctx):
                       label=f"{resource.kind}:{resource.id}")
 
 
+@binding("RESOURCES", ["kind"], area=AREA, optional=1,
+         doc="The ids the project declares, or only those of one kind.")
+def resources(ctx):
+    """``RESOURCES("sound")``: every declared sound, by the name ``RES`` takes.
+
+    A menu of the project's own files is built from this rather than from a list
+    typed next to the manifest, so declaring a second wav adds a row and dropping
+    one takes it away. The answer is the id, which is what ``RES`` accepts, and the
+    file's own path is readable off that handle - so a script never has to guess
+    where the manifest put it.
+    """
+    table = _project(ctx).resources
+    if table is None:
+        # a project that declares no resources at all still has an answer: none
+        return List([])
+    kind = ctx.as_string("kind") if ctx.has("kind") else ""
+    try:
+        entries = table.of_kind(kind) if kind else tuple(table.entries)
+    except ResourceError as exc:
+        raise ctx.fail(f"RESOURCES: {exc}")
+    return List([String(entry.id) for entry in entries])
+
+
 @binding("PRESET_LOAD", ["name"], area=AREA)
 def preset_load(ctx):
     """A saved pattern, as the values it holds and nothing else."""
@@ -307,6 +331,6 @@ def sleep(ctx):
 
 #: Names this module registers, used by the binding-help generator and tests.
 BINDINGS = (
-    "RES", "PRESET_LOAD", "PRESET_SAVE", "EXIT", "TIME", "FPS",
+    "RES", "RESOURCES", "PRESET_LOAD", "PRESET_SAVE", "EXIT", "TIME", "FPS",
     "SLEEP", "LOG", "MODE",
 )

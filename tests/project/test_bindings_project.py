@@ -2,7 +2,7 @@
 
 Every test writes ``.crude`` source against a real :class:`~crude.project.Project`
 in a ``tmp_path``, with the clock faked and no device, window or libpd in sight.
-That is the point of the area: the same nine calls answer the same way whether the
+That is the point of the area: the same calls answer the same way whether the
 project came up in a terminal over SSH or in a window, because they only talk to
 the project behind the host.
 """
@@ -156,7 +156,7 @@ def bare():
 
 def test_the_plan_named_exactly_these_project_bindings():
     assert BINDINGS == (
-        "RES", "PRESET_LOAD", "PRESET_SAVE", "EXIT", "TIME", "FPS",
+        "RES", "RESOURCES", "PRESET_LOAD", "PRESET_SAVE", "EXIT", "TIME", "FPS",
         "SLEEP", "LOG", "MODE",
     )
     for name in BINDINGS:
@@ -166,6 +166,7 @@ def test_the_plan_named_exactly_these_project_bindings():
 
 @pytest.mark.parametrize("name,args,optional", [
     ("RES", ("name",), 0),
+    ("RESOURCES", ("kind",), 1),
     ("PRESET_LOAD", ("name",), 0),
     ("PRESET_SAVE", ("name", "data"), 0),
     ("EXIT", ("code",), 1),
@@ -304,6 +305,66 @@ def test_a_script_outside_a_project_says_so(bare):
 
     assert error is not None
     assert f"RES: {NO_PROJECT}" in error.as_string()
+
+
+# -- RESOURCES ----------------------------------------------------------
+
+#: the same project with a sound or two declared, as a script sees its files
+WITH_SOUNDS = {"images": ["assets/knob_atlas.png"],
+               "sounds": ["assets/tone.wav", "assets/hit.wav"],
+               "presets": ["presets/*.json"],
+               **ARRAYS}
+
+
+def test_the_project_says_which_files_it_declares(host_for):
+    made = host_for(files={"assets/tone.wav": "x", "assets/hit.wav": "y"},
+                   resources=WITH_SOUNDS)
+
+    assert on(made, 'RESOURCES("sound")') == ["tone", "hit"]
+    assert on(made, 'RESOURCES("array")') == ["wave"]
+    assert on(made, 'RESOURCES("image")') == ["knob_atlas"]
+
+
+def test_every_name_it_answers_is_a_name_RES_takes(host_for):
+    made = host_for(files={"assets/tone.wav": "x", "assets/hit.wav": "y"},
+                   resources=WITH_SOUNDS)
+
+    # the whole point of the answer is that a script can hand it straight back:
+    # no spelling is a display name and a dead end at the same time
+    assert on(made, 'GET(RES(AT(RESOURCES("sound"), 0)), "kind")') == "sound"
+    assert on(made, 'GET(RES(AT(RESOURCES("sound"), 1)), "exists")') == 1
+    assert on(made, 'GET(RES(AT(RESOURCES("preset"), 0)), "kind")') == "preset"
+    assert on(made, 'GET(RES(AT(RESOURCES(), 0)), "kind")') == "image"
+
+
+def test_asking_for_all_of_them_asks_for_no_kind(host_for):
+    made = host_for(files={"assets/tone.wav": "x", "assets/hit.wav": "y"},
+                   resources=WITH_SOUNDS)
+
+    # two presets come from the presets glob in the default manifest, so the
+    # unkinded answer is the whole table in the order the manifest listed it
+    assert on(made, "RESOURCES()") == ["knob_atlas", "tone", "hit", "wave",
+                                        "knob", "loop"]
+
+
+def test_a_project_that_declares_nothing_answers_nothing(host_for):
+    made = host_for(resources=None)
+
+    assert on(made, "RESOURCES()") == []
+    assert on(made, 'LEN(RESOURCES("sound"))') == 0
+
+
+def test_a_kind_that_is_not_a_kind_names_the_four(refuse):
+    error = refuse('RESOURCES("noise")')
+
+    assert "RESOURCES: there is no resource kind 'noise'" in error
+    assert "image, sound, array, preset" in error
+
+
+def test_a_resource_kind_needs_the_word_for_one(refuse):
+    error = refuse("RESOURCES(5)")
+
+    assert "RESOURCES: argument 'kind' must be a string, got number" in error
 
 
 # -- presets ------------------------------------------------------------

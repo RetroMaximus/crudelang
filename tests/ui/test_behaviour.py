@@ -1086,6 +1086,48 @@ def test_a_link_carries_a_gesture_to_its_mirror_the_way_a_set_would(root):
     assert field.value == 7.0 and slider.value == 7.0
 
 
+def test_the_sender_stack_names_the_registration_answering_now(root):
+    """The sender is a stack, not a slot, because a handler may fire a handler.
+
+    A clip drag writes a knob, that knob's ``ON_CHANGE`` writes the clip back, and
+    the inner call belongs to the widget the *inner* registration is on - while it
+    runs. Read it as one slot and the outer widget would be blamed for a change it
+    never made; read it as a stack and it comes back to the outer one on the way
+    out, which is the order a person watching the screen would describe.
+    """
+    bridge = Handlers(name="test")
+    outer = placed(root, "button", {"label": "one"}, name="one",
+                   box=(0, 0, 100, 28))
+    inner = placed(root, "button", {"label": "two"}, name="two",
+                   box=(0, 40, 100, 28))
+    seen = []
+
+    def from_outer(*said):
+        seen.append(bridge.sender())
+        inner.on_click(*along(inner, 0.5), 0)
+        seen.append(bridge.sender())
+
+    bridge.add(outer, "click", from_outer)
+    bridge.add(inner, "click", lambda *said: seen.append(bridge.sender()))
+    outer.on_click(*along(outer, 0.5), 0)
+    assert seen == [outer, inner, outer]
+    assert bridge.sender() is None, "the stack unwound with the call"
+
+
+def test_a_frame_handler_has_no_sender_because_it_is_registered_on_no_widget(root):
+    """A frame handler is keyed on no widget, so it names no widget either.
+
+    ``SENDER()`` answering something here would be a bridge inventing a sender: the
+    tick covers the whole window, and the one honest answer is that no box made it.
+    """
+    bridge = Handlers(name="test")
+    seen = []
+    bridge.on_frame(lambda *said: seen.append(bridge.sender()))
+    assert bridge.fire_frame(0.016) == 1
+    assert seen == [None]
+    assert bridge.sender() is None
+
+
 # -- the same numbers down the real path -------------------------------------
 
 

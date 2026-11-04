@@ -202,6 +202,54 @@ def test_array_write_reports_a_rejected_write(run_pd, fake_lib, patch_file):
     assert "rejected" in error.as_string()
 
 
+def test_a_table_is_made_to_fit_a_longer_take_and_keeps_its_head(run_pd, runtime,
+                                                                eval_pd,
+                                                                fake_lib,
+                                                                patch_file):
+    """The size a patch was authored at is not the length of the file loaded.
+
+    The answer is the array's own size read back rather than the number asked for,
+    and growing keeps what was already written - a recorder that resized a table
+    only to find the first half of its take gone would be worse off than one that
+    could not resize at all.
+    """
+    _, error = run_pd(f'VAR p = PD_FILE("tone", "{patch_file.as_posix()}")')
+    assert error is None
+    patch = runtime.patch("tone")
+    held = f"{patch.dollar_zero}-wave"
+    fake_lib.add_array(held, [1.0, 2.0, 3.0])
+
+    assert as_py(eval_pd('PD_ARRAY_RESIZE(p, "wave", 5)')) == 5, \
+        "the size it has, not the size that was asked for"
+    assert fake_lib.arrays[held][:3] == [1.0, 2.0, 3.0], "the head stayed put"
+    assert as_py(eval_pd('PD_ARRAY_SIZE(p, "wave")')) == 5
+
+    # a write that could not fit before the resize fits now, and a shrink truncates
+    _, error = run_pd('PD_ARRAY_WRITE(p, "wave", [1, 2, 3, 4, 5])')
+    assert error is None
+    assert fake_lib.arrays[held] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert as_py(eval_pd('PD_ARRAY_RESIZE(p, "wave", 2)')) == 2
+    assert fake_lib.arrays[held] == [1.0, 2.0]
+
+
+def test_resizing_a_name_with_no_table_says_which_name(pd_failure, patch_file):
+    """A resize that made nothing is not a success, so the refusal names the array."""
+    error = pd_failure(
+        f'VAR p = PD_FILE("tone", "{patch_file.as_posix()}")\n'
+        'PD_ARRAY_RESIZE(p, "nope", 8)'
+    )
+    assert "'nope' is not on patch" in error.as_string()
+
+
+@pytest.mark.parametrize("size", [0, -4])
+def test_a_table_has_to_hold_a_sample(pd_failure, patch_file, size):
+    error = pd_failure(
+        f'VAR p = PD_FILE("tone", "{patch_file.as_posix()}")\n'
+        f'PD_ARRAY_RESIZE(p, "wave", {size})'
+    )
+    assert "not a table size" in error.as_string()
+
+
 def test_midi_bindings_reach_libpd(run_pd, runtime, fake_lib):
     _, error = run_pd(
         "PD_MIDI_NOTEON(0, 60, 100)\n"

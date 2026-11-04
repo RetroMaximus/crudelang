@@ -155,6 +155,29 @@ def test_seed_names_the_table_it_cannot_find(pd_failure):
     assert "no table called 'wave'" in error.as_string()
 
 
+def test_a_loaded_table_can_be_resized_by_the_word_the_script_used(run_pd, eval_pd,
+                                                                  fake_lib,
+                                                                  runtime):
+    """A take longer than the table was authored as: the reason the verb exists.
+
+    ``PD_TABLE`` states a size before anyone has heard the sound, and
+    ``PD_ARRAY_RESIZE`` is the same table once the file is open - still reached by
+    the bare word, because ``$0-sample`` is the patch's spelling of it and a script
+    should not have to know the instance number to write into its own table.
+    """
+    run_pd('VAR p = PD_BUILD("synth")\nPD_TABLE(p, "sample", 4)\nPD_LOAD(p)')
+    held = f"{runtime.patches['synth'].dollar_zero}-sample"
+
+    _refused, error = run_pd('PD_ARRAY_WRITE(p, "sample", [1, 2, 3, 4, 5, 6])')
+    assert error is not None, "six values will not fit in four slots"
+
+    assert as_py(eval_pd('PD_ARRAY_RESIZE(p, "sample", 6)')) == 6
+    _, error = run_pd('PD_ARRAY_WRITE(p, "sample", [1, 2, 3, 4, 5, 6])')
+    assert error is None, error.as_string()
+    assert fake_lib.arrays[held] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert as_py(eval_pd('PD_ARRAY_SIZE(p, "sample")')) == 6
+
+
 # -- wiring -------------------------------------------------------------
 
 
