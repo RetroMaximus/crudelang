@@ -14,6 +14,11 @@ fallback is logged by name, and a run that wanted audio and landed on the pulled
 backend is told - in its own output, by the loader - that nothing will be heard.
 Silence is never presented as working sound.
 
+The package also carries audio's file side: :mod:`crude.audio.wav` reads and
+writes uncompressed PCM, and :class:`~crude.audio.base.Capture` is where the
+frames a script records go. Both are reached through the ``WAV_*`` and
+``AUDIO_RECORD*`` bindings rather than by a script importing them.
+
 Nothing here imports ``sounddevice`` or ``pyaudio`` at module scope: the adapters
 do it lazily, so importing this package works on a machine with no PortAudio and
 a test can stub the library in ``sys.modules`` and drive the callback by hand.
@@ -32,6 +37,7 @@ from .base import (
     AudioConfig,
     AudioError,
     AudioUnavailable,
+    Capture,
     DeviceInfo,
     RecordingRender,
     Renderer,
@@ -47,12 +53,23 @@ from .base import (
 from .null import NULL_DEVICE, NullBackend
 from .pa_backend import PyAudioBackend
 from .sd_backend import SoundDeviceBackend
+from .wav import (
+    PCM8,
+    PCM16,
+    WIDTHS,
+    WavData,
+    plane_range,
+    read_wav,
+    read_wav_header,
+    write_wav,
+)
 
 __all__ = [
     "AudioBackend",
     "AudioConfig",
     "AudioError",
     "AudioUnavailable",
+    "Capture",
     "DeviceInfo",
     "NullBackend",
     "PyAudioBackend",
@@ -72,6 +89,14 @@ __all__ = [
     "check_direction",
     "status_text",
     "resolve_device",
+    "PCM8",
+    "PCM16",
+    "WIDTHS",
+    "WavData",
+    "read_wav",
+    "read_wav_header",
+    "write_wav",
+    "plane_range",
     "BACKENDS",
     "PREFERENCE",
     "register_backend",

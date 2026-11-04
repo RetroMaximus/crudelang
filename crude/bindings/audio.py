@@ -11,6 +11,10 @@ The handle ``AUDIO_INFO`` returns is readable with ``GET`` (``rms``, ``peak``,
 :data:`crude.audio.base.INFO_PROPS`). It is deliberately *not* writable: changing
 a channel count or a block size under a running stream would leave libpd and the
 meters disagreeing about the shape of a block.
+
+Both meters take a ``source`` of ``"output"`` or ``"input"``, defaulting to the
+output; recording itself lives in :mod:`crude.bindings.sound`, because a take on
+disk is a file and a file belongs to the language, not to the stream.
 """
 
 from __future__ import annotations
@@ -126,24 +130,36 @@ def audio_stop(ctx):
 # -- the meters ---------------------------------------------------------
 
 
-@binding("AUDIO_LEVEL", ["channel", "mode"], area=AREA, optional=2)
+@binding("AUDIO_LEVEL", ["channel", "mode", "source"], area=AREA, optional=3)
 def audio_level(ctx):
-    """One meter reading: ``rms`` (default), ``peak`` or ``db``."""
+    """One meter reading: ``rms`` (default), ``peak`` or ``db``.
+
+    ``source`` defaults to ``"output"``, the side the loudspeaker is on; pass
+    ``"input"`` to meter the microphone the same way. The runtime has always
+    answered for both, and a recorder that cannot see what is coming in is flying
+    blind.
+    """
     channel = _optional_int(ctx, "channel")
     mode = ctx.as_string("mode") if ctx.has("mode") else "rms"
+    source = ctx.as_string("source") if ctx.has("source") else "output"
     try:
-        return Number(float(_runtime(ctx).level(channel, mode)))
+        return Number(float(_runtime(ctx).level(channel, mode, source)))
     except AudioError as exc:
         _fail(ctx, exc)
 
 
-@binding("AUDIO_WAVEFORM", ["frames", "channel"], area=AREA, optional=2)
+@binding("AUDIO_WAVEFORM", ["frames", "channel", "source"], area=AREA, optional=3)
 def audio_waveform(ctx):
-    """The most recent samples, oldest first - what a scope widget draws."""
+    """The most recent samples, oldest first - what a scope widget draws.
+
+    ``source`` is ``"output"`` unless a script says ``"input"``, and the trace it
+    gets is the one the device actually carried, not a copy of what was sent to it.
+    """
     frames = _optional_int(ctx, "frames")
     channel = _optional_int(ctx, "channel")
+    source = ctx.as_string("source") if ctx.has("source") else "output"
     try:
-        samples = _runtime(ctx).waveform(frames, channel)
+        samples = _runtime(ctx).waveform(frames, channel, source)
     except AudioError as exc:
         _fail(ctx, exc)
     return List([Number(float(sample)) for sample in samples])

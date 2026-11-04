@@ -566,6 +566,148 @@ class Taps:
         return f"<Taps channels={self.channels} blocks={self.blocks}>"
 
 
+class Capture:
+    """One input channel's samples, kept until somebody asks for them.
+
+    A :class:`Taps` scope is a *window*: it forgets what it showed, which is right
+    for a meter and useless for a recording. This is the other half of the same
+    block - one channel, kept from the moment it is armed until the moment it is
+    stopped, in a buffer allocated by :meth:`start` and never grown again, so the
+    callback writes into memory that already exists (plan risk 6) and an idle
+    capture costs one boolean test per block.
+
+    Filling up is not an error: the frames past the end are counted in
+    :attr:`overflow` and dropped, so a recording that ran longer than its
+    seconds stops being a recording without taking the run down with it. A script
+    that cares reads ``overflow`` and says so out loud, which is the only honest
+    answer to "the last half second was never coming".
+
+    The buffer is ``array('f')`` - single precision, the width a device callback
+    already carries - because storing a microphone sample as a double keeps
+    nothing that was in it, at twice the memory.
+    """
+
+    def __init__(self, channels: int = 1):
+        self.channels = max(int(channels), 1)
+        self._lock = RLock()
+        self._data = None
+        self._max = 0
+        self._frames = 0
+        self._overflow = 0
+        self.channel = 0
+        self.rate = 0
+        self.armed = False
+
+    # -- arm ------------------------------------------------------------
+    def start(self, max_frames: int, channel: int = 0, rate: int = 0) -> int:
+        """Empty it, allocate for ``max_frames``, and take that one channel."""
+        wanted = max(int(max_frames), 1)
+        picked = int(channel)
+        if not 0 <= picked < self.channels:
+            raise AudioError(
+                f"cannot record channel {picked}: this stream has "
+                f"{self.channels} input channel(s)"
+            )
+        with self._lock:
+            self._data = _array_module.array("f", [0.0]) * wanted
+            self._max = wanted
+            self._frames = 0
+            self._overflow = 0
+            self.channel = picked
+            self.rate = int(rate or 0)
+            self.armed = True
+        return wanted
+
+    def stop(self) -> int:
+        """Take it off the callback; the frames already in are kept to be read."""
+        with self._lock:
+            self.armed = False
+            return self._frames
+
+    def reset(self) -> None:
+        """Disarm and drop everything, so a fresh capture cannot see the last."""
+        with self._lock:
+            self.armed = False
+            self._data = None
+            self._max = 0
+            self._frames = 0
+            self._overflow = 0
+
+    # -- feed -----------------------------------------------------------
+    def push(self, samples: Sequence[float], channels: int = None) -> int:
+        """Copy one block's worth of the chosen channel in; frames taken.
+
+        Called from the audio thread. Disarmed, it is not called at all - the
+        backend checks :attr:`armed` first - so the lock here is only ever held
+        for as long as one block takes to copy.
+        """
+        channels = max(int(channels or self.channels), 1)
+        count = len(samples) // channels
+        with self._lock:
+            if not (self.armed and self._data is not None) or not count:
+                return 0
+            pick = self.channel if self.channel < channels else 0
+            room = self._max - self._frames
+            taken = min(count, room)
+            data = self._data
+            start = self._frames
+            for frame in range(taken):
+                data[start + frame] = samples[frame * channels + pick]
+            self._frames = start + taken
+            if taken < count:
+                self._overflow += count - taken
+            return taken
+
+    # -- read -----------------------------------------------------------
+    @property
+    def frames(self) -> int:
+        with self._lock:
+            return self._frames
+
+    @property
+    def capacity(self) -> int:
+        with self._lock:
+            return self._max
+
+    @property
+    def overflow(self) -> int:
+        """Frames that arrived after the buffer was full, and were dropped."""
+        with self._lock:
+            return self._overflow
+
+    @property
+    def seconds(self) -> float:
+        with self._lock:
+            return self._frames / float(self.rate) if self.rate else 0.0
+
+    def samples(self) -> List[float]:
+        """What was captured, oldest first - a copy, so the callback can go on."""
+        with self._lock:
+            if self._data is None:
+                return []
+            return list(self._data[:self._frames])
+
+    def as_dict(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "armed": self.armed,
+                "channel": self.channel,
+                "frames": self._frames,
+                "capacity": self._max,
+                "overflow": self._overflow,
+                "rate": self.rate,
+            }
+
+    def describe(self) -> str:
+        said = "armed" if self.armed else "stopped"
+        with self._lock:
+            return (f"capture {said}: channel {self.channel}, "
+                    f"{self._frames} frame(s) of {self._max}")
+
+    def __repr__(self):
+        return self.describe()
+
+
 # -- the backend protocol -----------------------------------------------
 
 
@@ -595,6 +737,8 @@ class AudioBackend:
         self.log = log or (lambda message: None)
         self.taps = taps if taps is not None else Taps(self.config.out_channels, scope_frames)
         self.input_taps = Taps(max(self.config.in_channels, 1), scope_frames)
+        #: what the microphone said, kept from the moment a script arms it
+        self.capture = Capture(max(self.config.in_channels, 1))
 
         self.opened = False
         self.running = False
@@ -738,6 +882,10 @@ class AudioBackend:
             self.taps.push(out_buffer, self.config.out_channels)
         if in_buffer is not None and self.config.in_channels:
             self.input_taps.push(in_buffer, self.config.in_channels)
+            if self.capture.armed:
+                # a boolean read outside the lock, and the only cost of a stream
+                # nobody is recording into: one test per block
+                self.capture.push(in_buffer, self.config.in_channels)
         return size
 
     def process_block(self, ticks: int = 1) -> int:

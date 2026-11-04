@@ -388,6 +388,64 @@ class AudioRuntime:
     def scope_capacity(self) -> int:
         return self._taps().scope_capacity
 
+    # -- recording ------------------------------------------------------
+    def record_start(self, seconds: float, channel: int = 0) -> Dict[str, Any]:
+        """Arm the input capture for ``seconds`` of the stream's own rate.
+
+        The buffer is sized here and never grows afterwards, which is what lets a
+        device callback write into it: a recording that runs out of room reports
+        it as :attr:`~crude.audio.base.Capture.overflow` rather than as a stall.
+        Nothing is cleared on the way in - a capture that is already armed is
+        started again from zero, because "keep recording over the last take" is
+        not a thing anybody means by the word *record*.
+        """
+        if self._backend is None:
+            raise AudioError("audio is not open; call AUDIO_START first")
+        if not self.config.in_channels:
+            raise AudioError(
+                "this stream was opened with no input channels, so there is "
+                "nothing to record; the manifest's audio.in_channels must be 1 "
+                "or more"
+            )
+        span = float(seconds)
+        if span <= 0.0:
+            raise AudioError(f"a recording has to be for some time, got {seconds}")
+        rate = int(self.config.sample_rate)
+        frames = self._backend.capture.start(int(round(span * rate)), channel,
+                                             rate=rate)
+        if not self._backend.running:
+            # not an error - a pulled stream has no thread to be running - but a
+            # live stream that is stopped will capture silence, and that is worth
+            # one line the script can see in its own report
+            message = "audio record: the stream is not running, so nothing is arriving"
+            self.notes.append(message)
+            self.log(message)
+        return self.record_info()
+
+    def record_stop(self) -> int:
+        """Take the capture off the callback; the frames in it stay readable."""
+        if self._backend is None:
+            return 0
+        return self._backend.capture.stop()
+
+    def record_info(self) -> Dict[str, Any]:
+        """The capture as it stands: no stream and no capture answer as zeros."""
+        if self._backend is None:
+            return {
+                "armed": False, "channel": 0, "frames": 0, "capacity": 0,
+                "overflow": 0, "rate": int(self.config.sample_rate),
+                "seconds": 0.0,
+            }
+        data = self._backend.capture.as_dict()
+        data["seconds"] = self._backend.capture.seconds
+        return data
+
+    def record_samples(self) -> List[float]:
+        """Every frame captured since the last arm, oldest first."""
+        if self._backend is None:
+            return []
+        return self._backend.capture.samples()
+
     # -- devices --------------------------------------------------------
     def devices(self, direction: str = None) -> List[DeviceInfo]:
         """Every device every usable backend reports, so a script can pick one."""

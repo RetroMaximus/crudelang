@@ -43,6 +43,7 @@ The registry tags every binding with one of these `area=` values:
 | `pd.author` | patch authoring            | `bindings/pd_author.py` |
 | `pd.midi`   | the MIDI send shorthands  | inside `bindings/pd.py` |
 | `audio`     | the sample stream          | `bindings/audio.py`   |
+| `sound`     | wav files and a take       | `bindings/sound.py`   |
 | `midi`      | the MIDI ports             | `bindings/midi.py`    |
 | `project`   | resources, presets, mode  | `bindings/project.py` |
 | `ui`        | widgets, layout, style    | `bindings/ui.py`      |
@@ -159,14 +160,19 @@ does that on the loop's frame.
 AUDIO_INFO()                       AUDIO_DEVICES([direction])
 AUDIO_USE_DEVICES([input], [output])   AUDIO_DEVICE()
 AUDIO_START([backend])             AUDIO_STOP()
-AUDIO_LEVEL([channel, mode])       AUDIO_WAVEFORM([frames, channel])
+AUDIO_LEVEL([channel, mode, source])   AUDIO_WAVEFORM([frames, channel, source])
 ```
 
-`AUDIO_LEVEL`'s `mode` is `"rms"` (default) or `"peak"`; `AUDIO_WAVEFORM`
+`AUDIO_LEVEL`'s `mode` is `"rms"` (default), `"peak"` or `"db"`; `AUDIO_WAVEFORM`
 returns a list of numbers copied out of the last `frames` blocks. Both
 answers come from taps the runtime holds, so a run on the
 :class:`NullBackend` - pulled, no device thread, nothing audible - still has
 a waveform to read.
+
+Both meters also take a `source`: `"output"` (the default, what went to the
+speaker) or `"input"`, what came off the microphone. They are separate taps on
+separate buffers, so a recorder can show what is arriving while the patch is
+making something else entirely.
 
 `AUDIO_DEVICES([direction])` lists the machine's inputs (`"input"`), outputs
 (`"output"`) or both, one `"index: name"` line each. `AUDIO_USE_DEVICES(input,
@@ -175,6 +181,56 @@ close, open a fresh backend, re-attach the running session, and start again if
 it was running - so the File menu's Audio dialog can change devices without a
 restart. Omitted arguments keep the current device. `AUDIO_DEVICE()` reads back
 the `"input"`/`"output"` indices now in use.
+
+## Sound files and recording
+
+Audio's file side: a wav on disk, and a take off the input. These live apart from
+`AUDIO_*` because a path means the *project's* directory, not the working
+directory the run happened to start in - the same rule `PRESET_SAVE` keeps.
+
+```
+WAV_READ(path)                     WAV_LENGTH(path)
+WAV_WRITE(path, samples, rate[, channels, bits])
+AUDIO_RECORD()                     AUDIO_RECORD_STOP()
+AUDIO_RECORD_START(seconds, [channel])
+```
+
+A relative `path` is joined onto the project directory, and both separators work
+in the string a script writes, so `"samples/take.wav"` and
+`"samples\\take.wav"` are the same file. A backslash is the language's escape
+character, so a whole path written into a line of source needs forward slashes -
+which is also what the bindings answer with: `WAV_WRITE` returns the file's path
+spelled the way the project spells it, relative when it is inside the project.
+The folder a file is written into is made on the way.
+
+`WAV_READ` answers a `wav` handle and checks the header right there, so picking a
+file that is not sound fails at the call. Its samples are decoded only when a
+`GET` asks for them, and then kept, so reading `frames` over a folder of files
+costs a header each and not the audio. The readable props are `path`, `name`,
+`rate`, `channels`, `bits`, `frames`, `seconds`, `samples` (channel 0, as
+`-1..+1` floats) and `mixed` (every channel averaged into one). The handle is
+read-only.
+
+Only uncompressed PCM at 8 or 16 bits is read: a 24-bit file, a 32-bit float one
+or a compressed one is refused with what was found in its header named in the
+message, because decoding them wrong produces noise that still plays.
+
+`AUDIO_RECORD_START(seconds, [channel])` arms the input capture - one channel,
+`0` by default, a buffer sized from `seconds` and the stream's own rate - and
+answers a `recorder` handle. `AUDIO_RECORD()` hands back that handle at any
+time, and `GET` reads `armed`, `channel`, `frames`, `capacity`, `overflow`,
+`rate`, `seconds` and `samples` off it; `AUDIO_RECORD_STOP()` takes the take off
+the callback and answers the frame count, leaving the frames readable. A buffer
+that fills up is not an error: the extra frames are counted in `overflow` and
+dropped, which is the honest version of "the last part never arrived". The
+handle has no writable properties, because writing `armed` from a script thread
+would be a change to what the audio callback is filling.
+
+Recording is the one audio action that refuses rather than answering zeros: with
+no stream open, `AUDIO_RECORD_START` fails with `"audio is not open; call
+AUDIO_START first"`. A *reading* - `GET(AUDIO_RECORD(), "frames")` in a widget
+that runs every frame - answers `0` on a silent run, the way `AUDIO_LEVEL` does,
+so a recorder window still works where there is no microphone.
 
 ## MIDI
 

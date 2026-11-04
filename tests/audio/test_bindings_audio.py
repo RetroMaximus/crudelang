@@ -73,8 +73,8 @@ def test_the_plan_named_exactly_these_audio_bindings():
     ("AUDIO_DEVICE", (), 0),
     ("AUDIO_START", ("backend",), 1),
     ("AUDIO_STOP", (), 0),
-    ("AUDIO_LEVEL", ("channel", "mode"), 2),
-    ("AUDIO_WAVEFORM", ("frames", "channel"), 2),
+    ("AUDIO_LEVEL", ("channel", "mode", "source"), 3),
+    ("AUDIO_WAVEFORM", ("frames", "channel", "source"), 3),
 ])
 def test_every_audio_binding_declares_its_arguments(name, args, optional):
     entry = REGISTRY[name]
@@ -219,6 +219,25 @@ def test_a_level_without_a_stream_reads_silence(audio_program_for, config):
     assert as_py(value) == 0.0
 
 
+def test_the_input_meter_is_a_separate_tap(eval_audio, audio_runtime):
+    """``"input"`` reads what came off the device, not what went to the speaker.
+
+    The two taps hold different numbers here on purpose: the render fills the
+    output with 0.25 and nothing is fed into the input, so a flat 0 against a 0.25
+    is the proof that the argument chose the other side of the stream.
+    """
+    audio_runtime.tick(1)
+
+    assert as_py(eval_audio('AUDIO_LEVEL(0, "rms", "output")')) == pytest.approx(0.25)
+    assert as_py(eval_audio('AUDIO_LEVEL(0, "rms", "input")')) == pytest.approx(0.0)
+    assert as_py(eval_audio('AUDIO_LEVEL(0, "peak")')) == pytest.approx(0.25)
+
+
+def test_a_source_that_is_neither_side_of_the_stream_is_named(audio_failure):
+    error = audio_failure('AUDIO_LEVEL(0, "rms", "microphone")')
+    assert "must be 'output' or 'input', got 'microphone'" in error.as_string()
+
+
 # -- AUDIO_WAVEFORM -----------------------------------------------------
 
 
@@ -247,6 +266,13 @@ def test_a_waveform_without_a_stream_is_empty_not_an_error(audio_program_for,
 
     assert error is None
     assert as_py(value) == []
+
+
+def test_a_waveform_can_be_read_off_the_input(eval_audio, audio_runtime):
+    audio_runtime.tick(1)
+
+    assert as_py(eval_audio('AUDIO_WAVEFORM(4, 0, "output")')) == [0.25] * 4
+    assert as_py(eval_audio('AUDIO_WAVEFORM(4, 0, "input")')) == [0.0] * 4
 
 
 # -- AUDIO_DEVICES ------------------------------------------------------
