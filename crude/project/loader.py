@@ -629,9 +629,18 @@ class Project:
         how the process ends, so the code lands on :attr:`exit_code` and is
         returned here instead of raising. A zero exit says nothing in the log, since
         a script that finished on purpose has not gone wrong.
+
+        A kind ``WIDGET_DEFINE`` registers lives for one program, but the table that
+        holds them is global to the process, so the ones the last run left behind
+        are forgotten before this one starts. A project that defines a kind and is
+        run twice in one interpreter - the CI matrix running one example in three
+        modes, a test that stages an example for every case - is the same project
+        both times, not a second one that collides with the first.
         """
         from ..lang import Program
+        from ..ui import reset
 
+        reset()
         if self.program is None:
             self.program = Program(self.manifest.entry, host=self.host_object())
         try:

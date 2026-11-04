@@ -62,7 +62,11 @@ reads, like a Pd inlet index).
 
 `PROP_DEFINE(kind, name, type, default, ...)` lets a script's own kind
 declare the same shape at runtime, so a custom widget answers to the same
-`GET`/`SET` rules.
+`GET`/`SET` rules. The arguments past the default are `min`, `max`, `pd_name`
+and `hint`, and there is no way to skip one: a row with no range says `""`
+where the two numbers would go, which is read as *unbounded at that end* and
+not as `0`. Only a word that is neither a number nor empty is refused, by the
+row's own name.
 
 ## Label and readout placement
 
@@ -183,6 +187,13 @@ drop arguments: `OFF(w, "click", fn)` removes one handler by identity,
 `OFF(w, "click")` every handler for that event, and `OFF(w)` the whole list
 off the widget.
 
+`ON_DROP` is the one handler a widget shares rather than takes. A drop
+callback arrives with paths and no position, so the pointer is wherever the
+router last measured it: the widget under that point answers first, and the
+window answers as well unless it *is* the widget under the point. A clip that
+wants only the files dropped on it and a project that opens anything dropped
+anywhere are therefore both satisfiable, in that order.
+
 A handler that raises is reported by the loop and the widget's `mute`
 counter grows; a widget that raises three frames in a row paints a red
 placeholder and mutes until a `SET(w, "mute", false)` or a `PAINT_REQUEST`
@@ -207,6 +218,14 @@ send/recv and warns; the plan's Rule 17.
 `WIDGET_KINDS()` returns the catalog plus every registered custom kind;
 `WIDGET_PROPS(kind)` is the schema a script can read; `WIDGET_HAS(w, prop)`
 is the check that a widget's own kind holds one named prop.
+
+A kind a script defined lives for one program run, and a run is the boundary:
+whatever the last entry script registered is forgotten before this one starts,
+so a project that defines `badge` can be loaded twice in one interpreter - the
+CI matrix taking one example through three modes, a test staging an example
+again per case - without the second run being refused its own name. The worked
+example is `examples/all_gui`, whose badge page is the only script-drawn kind
+any shipped project defines.
 
 ## Canvases
 
@@ -425,6 +444,12 @@ or glued on `top` and `bottom` - keeps that height when it folds, because the bo
 is hidden and collapsed while the cell is nobody else's to resize. `GROUPS(g)` lists
 the groups inside a group, and a nested group that was folded stays folded when its
 parent opens: `visible` is written on the body, and the pass never reaches past it.
+
+The worked example is `examples/all_gui`: its deck is four sections in a
+dockable three-column grid, and every verb below has a row under the grid that
+says back the cell it took or the refusal it was given - `Style` is not
+dockable on purpose, so the refusal is a fact on the page rather than a claim
+in a manual.
 
 `accordion` is the one row read on a widget other than the one it names. "Opening
 one closes its siblings" is a statement about a set, and a nested group's parent is

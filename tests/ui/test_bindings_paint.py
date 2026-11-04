@@ -249,6 +249,37 @@ def test_a_string_row_holds_the_words_a_script_gives_it(eval_ui, run):
     assert eval_ui('SET(w, "side", "down")') == "down"
 
 
+def test_a_row_that_has_no_range_can_still_be_hinted(eval_ui, run):
+    """The three ``""`` that reach a bool row's hint mean "no limit", not a crash.
+
+    ``PROP_DEFINE`` has no skipped-argument syntax, so a script that wants to hint
+    a row with no range has to say the range it does not have. An empty end of a
+    range is the row being unbounded there; only a word that is neither a number
+    nor empty is a mistake, and it is refused by name.
+    """
+    eval_ui('WIDGET_DEFINE("badge", "panel")')
+    eval_ui('PROP_DEFINE("badge", "lit", "bool", 0, "", "", "", "lit?")')
+    eval_ui('VAR w = WIDGET("badge")')
+
+    row = get_kind("badge").props["lit"]
+    assert row.type == "bool"
+    assert row.minimum is None and row.maximum is None
+    assert row.hint == "lit?"
+    assert eval_ui('GET(w, "lit")') == 0
+    assert eval_ui('SET(w, "lit", 1)') == 1
+
+
+def test_a_range_end_that_is_neither_a_number_nor_empty_is_refused_by_name(
+        run, ui_failure):
+    """``float('ten')`` is never allowed to be the answer a script gets."""
+    run('WIDGET_DEFINE("stepper")')
+    error = ui_failure('PROP_DEFINE("stepper", "value", "number", 0, "ten", 100)')
+
+    assert "stepper.value" in error
+    assert "takes its min from" in error
+    assert "is not a number" in error
+
+
 def test_restating_an_inherited_row_keeps_everything_this_call_left_out(
         eval_ui, run):
     """A variant changes one number, not the hint, the Pd name or the bounds.

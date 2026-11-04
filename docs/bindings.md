@@ -90,7 +90,10 @@ one.
 
 `MODE()` says which of `terminal`/`headless`/`window` this run landed on;
 `FPS()` reads the loop's own target; `TIME()` is the clock's seconds;
-`EXIT(code)` raises an `ExitRequest` the loop catches on the way out.
+`EXIT(code)` raises an `ExitRequest` the loop catches on the way out. It is let
+through wherever the script asked, including out of a widget handler: a menu's
+Quit row ends the run with the code it was given rather than being logged as a
+handler that failed and muted for asking.
 `RES(id)` looks a declared resource up in the project's resource table
 (`GET(RES("sqr"), "values")` is how `fm_synth` reads one of its arrays), and
 `RESOURCES([kind])` answers the ids that table holds - all of them, or only the
@@ -497,7 +500,10 @@ scenes that are not the target leave the tree, the target's arrive in the order
 they left, and an unknown name or number is refused with the list the window
 does have. `WORKSPACE_NAMES()` is that list (`root` first, always) and
 `WORKSPACE_INDEX()` the number of the one on screen, so a `View` menu and a
-loop over the array are the same two calls.
+loop over the array are the same two calls. The number `WORKSPACE_INDEX()`
+answers carries a float, as every number here does, and `WORKSPACE_SHOW` reads
+that back as the scene's number rather than as a scene called `"2.0"`; a part of
+a number such as `1.5` is refused as a number, not guessed at as a name.
 
 `WORKSPACE_ADD(mixer, w)` parents a widget into a scene whether or not that
 scene is on screen, which is how a project builds four pages and shows one.
@@ -517,6 +523,10 @@ what puts it back. Declaring an `on_enter` says "rebuild me" by itself.
 The `ui.workspaces` manifest key (`manifest.md`) reserves the names and the
 order before the script runs; `root` is index 0 whatever the list says, and a
 script that declares a reserved scene fills it in rather than colliding with it.
+The worked example is `examples/all_gui`: five reserved scenes and the deck
+built before any of them is stood in, a `Go` menu that re-reads the list on
+every open, and a coverage test that walks the script's own `PAGES` because a
+hidden scene is not under the root for a walk to find.
 
 ## Groups
 

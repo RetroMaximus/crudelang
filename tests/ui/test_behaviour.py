@@ -1128,6 +1128,65 @@ def test_a_frame_handler_has_no_sender_because_it_is_registered_on_no_widget(roo
     assert bridge.sender() is None
 
 
+def test_a_host_callable_registration_is_called_by_the_bridge_and_not_the_program(root):
+    """The toolkit's own handlers are Python, and a project's script is attached anyway.
+
+    :meth:`~crude.ui.menu.MenuDialog._watch_resize` registers a plain function on the
+    window's root so a settings page sized from its window follows a resize. Which of
+    the two kinds a registration is has to be read off the callable: asking
+    ``Program.invoke`` first handed that function to the interpreter in every real run,
+    and the interpreter answers "function is not callable" for anything with no
+    ``execute``, so the watcher died, the page stopped following the window, and the
+    bridge logged a bug that was its own rather than the project's.
+    """
+    import types
+
+    from crude.lang import Program
+
+    bridge = Handlers(name="test")
+    bridge.attach_program(Program("<behaviour>",
+                                  host=types.SimpleNamespace(ui=None)))
+    seen = []
+    bridge.add(root, "resize", lambda *said: seen.append(said))
+    assert bridge.fire(root, "resize", 640, 480) == 1
+    assert seen == [(640, 480, "resize")], "the tree's own arguments, event name last"
+    assert bridge.errors == []
+    assert bridge.handlers(root, "resize")[0].calls == 1
+
+
+def test_a_script_function_registration_still_runs_through_the_interpreter(root):
+    """The other half of the same choice: a ``FUNC`` is not callable from here.
+
+    A script's function is only runnable by the interpreter, so a bridge holding both
+    a script handler and a host handler on the same event has to tell them apart - and
+    the way it tells them apart has to be the fact that decides, not the accident of
+    which one was registered first.
+    """
+    import types
+
+    from crude.lang import Program
+
+    program = Program("<behaviour>", host=types.SimpleNamespace(ui=None))
+    _, error = program.run("VAR HITS = [0.0]\n"
+                           "FUNC note(v)\n"
+                           "    SET_AT(HITS, 0, AT(HITS, 0) + v)\n"
+                           "    RETURN v\n"
+                           "END\n")
+    assert error is None, error
+    note = program.symbol_table.get("note")
+    assert hasattr(note, "execute"), "a script function is not a Python callable"
+    bridge = Handlers(name="test")
+    bridge.attach_program(program)
+    seen = []
+    bridge.add(root, "resize", lambda *said: seen.append(said))
+    bridge.add(root, "resize", note)
+    assert bridge.fire(root, "resize", 12.0, 480) == 2
+    assert seen == [(12.0, 480, "resize")], "the host callable ran here"
+    hits = program.symbol_table.get("HITS")
+    assert hits.elements[0].value == 12.0, "the script function ran there"
+    assert bridge.errors == []
+
+
 # -- the same numbers down the real path -------------------------------------
 
 

@@ -595,6 +595,34 @@ def test_a_resize_keeps_the_buttons_at_the_bottom_and_grows_the_band():
     assert said[1] + said[3] <= dialog.actions.screen_box[1]
 
 
+def test_a_window_resize_re_frames_the_page_through_the_handlers_bridge():
+    """The dialog's own watcher, run down the door GLFW uses, with a script attached.
+
+    ``set_size`` plus a hand ``layout`` pass moves the glued rows - the test above -
+    but the panel's *height* is re-measured by
+    :meth:`~crude.ui.menu.MenuDialog._watch_resize`, a plain Python callable
+    registered on the window's root, which only the handler bridge can run. A bridge
+    that asked ``Program.invoke`` for every registration logged "function is not
+    callable" and muted that watcher, so a project with a script attached kept the
+    page its window had before the drag and blamed the project for it.
+    """
+    program, ctx = _program()
+    assert ctx.handlers.program is program, "the host's UI carries the script"
+    dialog = MenuBar(ctx, "menu").menu("Audio").add_dialog(
+        "Devices", [{"kind": "number", "label": "Rate", "min": 1,
+                     "max": 192000, "value": 44100}],
+        buttons=["Rescan", "Cancel"])
+    dialog.open()
+    ctx.layout()
+    was = dialog.popup.height
+    ctx.on_resize(900, 700)
+    ctx.dispatch()
+    assert ctx.handlers.errors == [], ctx.handlers.errors
+    assert dialog.popup.height > was, "the page took the room the new window gives it"
+    assert (dialog.popup.y + dialog.popup.height
+            <= ctx.height - DIALOG_MARGIN)
+
+
 def test_a_title_drag_moves_the_page_and_clamps_at_the_edge():
     """Grabbing the title row moves the panel, and everything glued to it goes.
 

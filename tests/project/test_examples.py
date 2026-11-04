@@ -1,6 +1,6 @@
-"""The five example projects, judged the way the plan judges them.
+"""The six example projects, judged the way the plan judges them.
 
-``check`` on all five lists the exact steps, a mistyped manifest key still costs
+``check`` on all six lists the exact steps, a mistyped manifest key still costs
 exit 2 with its pointer, and the build cache is reused on the second run. The
 examples are copied into ``tmp_path`` first: a project writes its own log,
 its own ``.crude_build`` and - for the recorder - its own saved takes where it
@@ -13,7 +13,9 @@ What each example can do *today* is part of the record too:
   what they write;
 * ``metronome`` is the plan's widget worked example and ``sensor_bridge`` the
   serial one, so both are checked as far as the stages that have landed: their
-  manifests validate, their resources are all there, and their scripts parse.
+  manifests validate, their resources are all there, and their scripts parse;
+* ``all_gui`` is the UI catalog showcase - declared files and no patches, so
+  what is pinned about it is what a check prints about its resources.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from crude.project import CHECK_PHASES, MANIFEST_NAME
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 NAMES = ("hello_terminal", "metronome", "fm_synth", "sensor_bridge",
-         "sound_recorder")
+         "sound_recorder", "all_gui")
 
 
 @pytest.fixture(autouse=True)
@@ -116,6 +118,7 @@ def test_the_project_id_is_the_name_the_directory_is_known_by():
         "fm_synth": "fm-synth",
         "sensor_bridge": "sensor-bridge",
         "sound_recorder": "sound-recorder",
+        "all_gui": "all-gui",
     }
 
 
@@ -227,6 +230,20 @@ def test_the_sound_recorder_ships_the_take_it_loads(copied, capsys):
     assert "resources 0 image, 1 sound, 0 array, 0 preset" in out
     assert "1 declared file(s) are there" in out
     # the patch is authored by the script, so nothing is declared for it to arrive in
+    assert "no patches declared" in out
+    assert "mode window at 60 fps" in out
+
+
+def test_the_showcase_ships_the_table_and_the_presets_it_reads(copied, capsys):
+    assert main(["check", copied("all_gui")]) == EXIT_OK
+
+    out, _ = capsys.readouterr()
+    # one array file for the plots and the clip, and the two preset files the
+    # controls page's bar lists - the showcase reads both and writes neither,
+    # so a run can never leave a file in the tree
+    assert "resources 0 image, 0 sound, 1 array, 2 preset" in out
+    assert "3 declared file(s) are there" in out
+    # UI-only by decision: every control's answer is on the page it sits on
     assert "no patches declared" in out
     assert "mode window at 60 fps" in out
 

@@ -219,6 +219,27 @@ def test_a_scene_is_shown_by_its_name_by_its_number_or_by_the_object(ctx):
         held.show(7)
 
 
+def test_a_scene_number_that_arrives_as_a_float_is_still_a_number(ctx):
+    """``WORKSPACE_INDEX()`` answers a float, and the door it comes back to reads one.
+
+    Every number this language carries is a float, so the round trip the bindings
+    promise - take the current scene's number, show it again - reached :meth:`get`
+    as ``1.0``. Read as a name it is a scene called "1.0" and the promise is a lie;
+    read as a number it is the second scene, which is what the script meant.
+    """
+    held = ctx.workspaces
+    held.declare("mixer")
+
+    assert held.get(1.0) is held.rows[1]
+    assert held.show(0.0) == ROOT_WORKSPACE
+    assert held.index_of(1.0) == 1
+
+    with pytest.raises(WorkspaceError) as caught:
+        held.get(1.5)
+    assert "not a scene number" in str(caught.value), (
+        "a part of a scene is not a scene, and says so rather than listing names")
+
+
 # -- what a switch moves ------------------------------------------------
 
 
@@ -431,6 +452,22 @@ def test_a_scene_reaches_show_by_its_handle_by_its_name_and_by_its_number(run,
         "a window may have a scene called \"2\": the name is tried first")
 
 
+def test_a_scene_number_a_script_stored_comes_back_through_the_door(run, eval_ui):
+    """``WORKSPACE_SHOW(WORKSPACE_INDEX())`` is the docs' round trip, not a refusal.
+
+    The number is held in a variable rather than written out, which is the shape a
+    `View` menu and a loop over the scene list actually use - and the value a script
+    gets back out of the bindings is a float, not the literal it would have typed.
+    """
+    run('WORKSPACE("mixer")\nWORKSPACE("sequencer")\n')
+    assert eval_ui("WORKSPACE_INDEX()") == 2.0
+
+    run("VAR was = WORKSPACE_INDEX()\nWORKSPACE_SHOW(\"root\")\n")
+    assert eval_ui("WORKSPACE()") == ROOT_WORKSPACE
+    assert eval_ui("WORKSPACE_SHOW(was)") == "sequencer", (
+        "the number it left is the number it came back on")
+
+
 def test_a_widget_built_after_a_switch_lives_in_the_new_scene(run, eval_ui,
                                                               stage):
     """``SLIDER(...)`` still means "put it on screen", and screen means this scene."""
@@ -557,6 +594,9 @@ def test_a_missing_or_wrong_scene_name_says_what_the_window_has(run, ui_failure)
     said = ui_failure("WORKSPACE_SHOW(7)")
     assert "no workspace number 7" in said
     assert "root, mixer" in said
+
+    said = ui_failure("WORKSPACE_SHOW(1.5)")
+    assert "not a scene number" in said
 
     assert "needs a name" in ui_failure('WORKSPACE("")')
     assert "too few" in ui_failure("WORKSPACE_SHOW()")

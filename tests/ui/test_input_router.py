@@ -621,6 +621,53 @@ def test_a_drop_lands_on_the_root(stage):
     assert router.names() == ["drop"]
 
 
+def test_a_drop_lands_on_the_widget_under_the_pointer_as_well(stage):
+    """``ON_DROP(w, fn)`` is a real door: the file goes to what it landed on.
+
+    The drop callback carries no position, so the answer is where the pointer
+    was last measured - and the window is asked too, because a project that
+    opens anything dropped anywhere has no widget to thank for it.
+    """
+    class Clip(Widget):
+        def on_drop(self, paths):
+            self._said("drop", paths)
+
+    class Root:
+        def __init__(self):
+            self.paths = None
+
+        def on_drop(self, paths):
+            self.paths = paths
+
+    root = Root()
+    held = stage.place(Clip("clip"), 100, 50, 40, 40)
+    router = stage.router(root=root)
+    router.move_to(110, 60)
+    router.on_drop(["take.wav"])
+    router.dispatch()
+    assert held.of("drop") == [("drop", ("take.wav",))]
+    assert root.paths == ("take.wav",)
+    # the widget is asked first, so a log reads in the order the answers came
+    assert router.names()[-2:] == ["drop", "drop"]
+    assert router.log[-2][2] is held and router.log[-1][2] is root
+
+
+def test_a_drop_on_the_window_s_own_box_is_answered_once(stage):
+    """A pointer over the root is not two targets: the window hears one drop."""
+    class Root(Widget):
+        def on_drop(self, paths):
+            self._said("drop", paths)
+
+    root = Root("root")
+    stage.place(root, 0, 0, 200, 100)
+    router = stage.router(root=root)
+    router.move_to(110, 60)
+    router.on_drop(["take.wav"])
+    router.dispatch()
+    assert root.of("drop") == [("drop", ("take.wav",))]
+    assert router.names().count("drop") == 1
+
+
 def test_a_close_request_is_only_answered_once_it_is_dispatched(router):
     assert router.on_close_request() is None
     assert router.close_allowed is False

@@ -1,7 +1,7 @@
 """Context, symbol table and the tree-walking interpreter.
 
 The interpreter is a straight port of the tutorial implementation that used to
-live in ``crudelang.py`` with three deliberate differences:
+live in ``crudelang.py``, with these deliberate differences:
 
 * a value is looked up with ``is None`` instead of a truthiness test, so
   ``null``/``0``/``""`` are valid variable contents;
@@ -9,10 +9,14 @@ live in ``crudelang.py`` with three deliberate differences:
 * loop bodies can update enclosing variables (they always could - a loop body
   is visited in the caller's context, not in a child scope - so ``VAR`` keeps
   binding in the current scope and *shadowing* across function boundaries
-  still behaves exactly like the original interpreter).
-
-``SymbolTable.assign`` additionally walks the scope chain for host code that
-needs it; the language's ``VAR`` statement does not use it.
+  still behaves exactly like the original interpreter);
+* ``SymbolTable.assign`` additionally walks the scope chain for host code that
+  needs it; the language's ``VAR`` statement does not use it;
+* a loop body that raises **ends the loop**. The tutorial's guard reads
+  ``should_return() and loop_should_continue is False``, and a failure leaves
+  ``loop_should_continue`` at ``None`` rather than ``False``, so an error in a body
+  was swallowed and the condition went on answering the same - a script that
+  hangs and grows instead of saying what is wrong. The error is returned first.
 """
 
 from __future__ import annotations
@@ -283,6 +287,11 @@ class Interpreter:
             i += step_value.value
 
             value = res.register(self.visit(node.body_node, context))
+            # an error in a body is an answer, not a lap: ``failure`` leaves the two
+            # loop flags at ``None``, so the guard below cannot see it, and the
+            # condition would go on returning the same truth forever
+            if res.error is not None:
+                return res
             if res.should_return() and res.loop_should_continue is False and res.loop_should_break is False:
                 return res
 
@@ -313,6 +322,10 @@ class Interpreter:
                 break
 
             value = res.register(self.visit(node.body_node, context))
+            # see ``visit_ForNode``: a body that raises ends the loop rather than
+            # spinning in it with the error thrown away
+            if res.error is not None:
+                return res
             if res.should_return() and res.loop_should_continue is False and res.loop_should_break is False:
                 return res
 

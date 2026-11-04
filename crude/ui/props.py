@@ -111,6 +111,26 @@ def _words(choices: Sequence[str]) -> str:
     return ", ".join("''" if not word else f"'{word}'" for word in choices)
 
 
+def _limit(value: Any, kind: str, name: str, word: str) -> Optional[float]:
+    """One end of a range as a number, or ``None`` when it says "no limit".
+
+    ``None`` and an empty string both mean the row is unbounded at this end, which
+    is what lets a script reach a later argument of ``PROP_DEFINE`` - the hint of a
+    row that has no range - by leaving the range out. Anything else that is not a
+    number is refused in the row's own words rather than crashing on ``float()``
+    halfway through the table.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise PropError(f"'{kind}.{name}' takes its {word} from "
+                        f"{_shown(value)}, which is not a number") from None
+
+
 class Prop:
     """One row of one kind's table.
 
@@ -136,10 +156,12 @@ class Prop:
                             f"{' or '.join(TYPES)}")
         if not name:
             raise PropError(f"a prop of '{kind}' has no name")
+        minimum = _limit(minimum, kind, name, "min")
+        maximum = _limit(maximum, kind, name, "max")
         if minimum is not None and maximum is not None:
-            if float(minimum) > float(maximum):
+            if minimum > maximum:
                 raise PropError(f"'{kind}.{name}' has an inverted range: min "
-                                f"{minimum} is above max {maximum}")
+                                f"{minimum:g} is above max {maximum:g}")
         ranged = (minimum is not None or maximum is not None
                   or any(str(word) for word in (bounds or ("", ""))))
         if ranged and type != "number":
@@ -152,10 +174,8 @@ class Prop:
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "type", type)
-        object.__setattr__(self, "minimum", None if minimum is None
-                           else float(minimum))
-        object.__setattr__(self, "maximum", None if maximum is None
-                           else float(maximum))
+        object.__setattr__(self, "minimum", minimum)
+        object.__setattr__(self, "maximum", maximum)
         object.__setattr__(self, "bounds", (bounds[0], bounds[1]))
         object.__setattr__(self, "pd_name", str(pd_name or ""))
         object.__setattr__(self, "hint", str(hint or ""))

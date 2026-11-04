@@ -28,6 +28,7 @@ from crude.bindings.ui import (
     STYLE_PROPS,
     WIDGET_KIND,
 )
+from crude.errors import ExitRequest
 from crude.lang import Program
 from crude.lang.values import HostHandle, List, Number, String
 from crude.ui import (
@@ -856,6 +857,58 @@ def test_sender_answers_null_when_there_is_no_window():
                            host=types.SimpleNamespace()).run("SENDER()")
     assert error is None, error
     assert as_py(value) == 0
+
+
+# -- a script's own stop, asked from the tree --------------------------
+
+
+def test_exit_from_a_widget_handler_reaches_the_loop_rather_than_the_error_list(
+        stage):
+    """A menu's Quit row is the script asking to stop, not a handler that broke.
+
+    :meth:`Handlers._call` catches everything a script can raise, which is right for
+    a bug and wrong for an :class:`~crude.errors.ExitRequest`: the runtime's loop
+    reads that one off the frame and ends the run with the code it carries, so
+    counting it as a failure would mute the row that asked, log an error that never
+    happened and leave a window nobody can close from the menu.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR a = BUTTON("quit")\n'
+        "PLACE(a, 0, 0, 100, 28)\n"
+        "ON_CLICK(a, FUNC() -> EXIT(7))\n"
+    )
+    assert error is None, error.as_string()
+    with pytest.raises(ExitRequest) as caught:
+        ctx.router.click(50, 14)
+    assert caught.value.code == 7
+    assert ctx.handlers.errors == [], "a stop on purpose is not a failed handler"
+    assert ctx.handlers.stats()["muted"] == 0
+
+
+def test_an_exit_asked_by_a_frame_handler_ends_the_frame_on_purpose(stage):
+    """``EXIT`` means the same thing from ``ON_FRAME`` as from a click.
+
+    The loop's own docstring says a frame handler that raises ``ExitRequest`` is one
+    of the four ways a run stops, so the frame that fired it owes it the same way
+    out - and still owes the sender stack its unwind, which is what the null answer
+    below proves.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR who = TEXT("-")\n'
+        "PLACE(who, 0, 0, 100, 20)\n"
+        'ON_FRAME(FUNC() -> EXIT(0))\n'
+        'ON_CLICK(who, FUNC() -> SET(who, "label", STR(SENDER())))\n'
+    )
+    assert error is None, error.as_string()
+    with pytest.raises(ExitRequest):
+        ctx.frame(dt=0.016)
+    assert ctx.handlers.errors == []
+    ctx.router.click(50, 10)
+    value, err = program.run('GET(who, "label")')
+    assert err is None, err.as_string()
+    assert as_py(value) != "0", "the sender stack came back unwound"
 
 
 # -- style --------------------------------------------------------------

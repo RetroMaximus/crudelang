@@ -171,6 +171,16 @@ class Workspaces:
         if not said:
             raise WorkspaceError("a workspace needs a name: WORKSPACE(\"mixer\"), "
                                  "or a number from WORKSPACE_INDEX()")
+        if isinstance(wanted, float):
+            if not wanted.is_integer():
+                raise WorkspaceError(f"{said} is not a scene number: WORKSPACE_INDEX() "
+                                     "answers a whole one, and WORKSPACE_SHOW takes it "
+                                     "back as it stands")
+            # every number this language carries is a float, so the value a script
+            # read out of WORKSPACE_INDEX() and handed straight back arrives as 2.0 -
+            # and a doc that says the number is the same gesture as the name has to
+            # read it that way rather than look for a scene called "2.0"
+            said = str(int(wanted))
         found = self._by_name.get(said)
         if found is not None:
             return found

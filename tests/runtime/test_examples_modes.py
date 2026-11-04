@@ -4,9 +4,10 @@ S5 pinned that every example *checks*; S8 and S10 pinned what each one's
 runtime halves do on their own; S11 has to say the loop actually enters,
 paces, and shuts down whatever the manifest asks for. The matrix here is
 the honest reading of the plan's line - "4 examples × 3 modes; default
-marker set fully green", with one example more than the plan counted because
-``sound_recorder`` landed after S11 and joins the matrix rather than getting a
-table of its own - and every cell goes through the same
+marker set fully green", with two examples more than the plan counted because
+``sound_recorder`` landed after S11 and ``all_gui`` came after it, each joining
+the matrix rather than getting a table of its own - and every cell goes
+through the same
 :func:`crude.cli.main` the person at the terminal hits:
 
     python -m crude run <example> --mode <terminal|headless|window> \
@@ -21,7 +22,7 @@ and ``--frames 0`` bounds the loop before a single tick is pumped. The
 the loader opens it on the loop the ``SERIAL_OPEN("arduino")`` call in
 ``main.crude`` looks up by id, without a real ``COM3`` anywhere.
 
-What the fifteen cells assert is not "the mode did something" - the loop
+What the eighteen cells assert is not "the mode did something" - the loop
 bounded at zero frames is the plan's CI shape, and its honest answer is
 "the mode came up, ran the script, and shut everything down cleanly".
 Every one of them is :data:`crude.cli.EXIT_OK`, and every one of them
@@ -48,7 +49,7 @@ from crude.ui.recording import RecordingRenderer
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 NAMES = ("hello_terminal", "metronome", "fm_synth", "sensor_bridge",
-         "sound_recorder")
+         "sound_recorder", "all_gui")
 MODES = ("terminal", "headless", "window")
 
 
@@ -173,7 +174,7 @@ def window_opened(monkeypatch):
     return opened
 
 
-# -- the fifteen cells: every example in every mode ---------------------
+# -- the eighteen cells: every example in every mode -------------------
 
 
 def _run(path: str, mode: str, extra: List[str] = None) -> int:
@@ -287,6 +288,25 @@ def test_the_sound_recorder_cell_loads_the_take_the_manifest_declares(copied,
     out, _ = capsys.readouterr()
     assert "loaded tone - 88200 samples at 44100 Hz onto 1 track(s)" in out
     assert "sound-recorder: 5 tracks, 1 declared sound(s), step 882" in out
+
+
+def test_the_showcase_cell_opens_on_the_deck_and_says_which_scene(copied,
+                                                                  nolib,
+                                                                  window_opened,
+                                                                  capsys):
+    """The showcase in a CI cell: six scenes built, the deck stood in.
+
+    No Pd patch and no device is what this example is *for* - the answer
+    every page gives is on its own page - so the headless cell's whole report
+    is the script's own opening line: the scene it showed, and how many
+    scenes and pages it built before showing it.
+    """
+    path = copied("all_gui")
+
+    assert _run(path, "headless") == EXIT_OK
+
+    out, _ = capsys.readouterr()
+    assert ("all_gui: opens on 'root' with 6 scenes and 6 pages" in out)
 
 
 def test_the_metronome_cell_in_terminal_still_runs_the_widget_tree(copied,

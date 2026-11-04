@@ -93,6 +93,19 @@ def test_while_loop_collects_body_values(eval_src):
     assert as_py(eval_src(source)) == [0, 1]
 
 
+def test_an_error_in_a_while_body_ends_the_loop(failure):
+    # the counter below never moves, so this is the shape that used to hang: a
+    # failure left the two loop flags at ``None``, the guard could not see it, and
+    # the condition went on answering ``True`` until the process was killed
+    error = failure("VAR i = 0\nWHILE i < 3 THEN\n  missing_thing\nEND\ni")
+    assert "'missing_thing' is not defined" in error.details
+
+
+def test_an_error_in_a_for_body_ends_the_loop(failure):
+    error = failure("FOR i = 0 TO 3 THEN\n  missing_thing\nEND")
+    assert "'missing_thing' is not defined" in error.details
+
+
 def test_block_loops_return_null(eval_src):
     assert as_py(eval_src("FOR i = 0 TO 3 THEN\n i\nEND")) == 0
     assert as_py(eval_src("WHILE 0 THEN\n 1\nEND")) == 0

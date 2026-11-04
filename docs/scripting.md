@@ -18,10 +18,11 @@ Four kinds:
 | `List`     | `[1, 2, 3]`             | `AT(l, i)`, `APPEND`   |
 | `Function` | `FUNC(x) -> x * 2`      | `ON_*`, `FUNC name(v)` |
 
-A `null` is a `Number(0)`; a bare name that has never been `VAR`'d is
-`null`, not a `NameError`. Assignment is nearest-binding: `VAR x = 1`
-inside a `WHILE` body updates the outer `x` if the outer binding is the
-nearest one named `x`, which is the plan's Rule 24.
+A `null` is a `Number(0)`; a bare name that has never been `VAR`'d is an
+error that names itself (`'nope' is not defined`) rather than a quiet `null`,
+so a typo is reported instead of run with. Assignment is nearest-binding:
+`VAR x = 1` inside a `WHILE` body updates the outer `x` if the outer binding is
+the nearest one named `x`, which is the plan's Rule 24.
 
 The comparison surface (`==`, `!=`, `<`, `>`, `<=`, `>=`) works on
 numbers, strings and lists. `"a" == "a"` is a real answer, and `"a" !=
@@ -48,6 +49,14 @@ expr                           # a call at the top level is a statement
 A statement's last expression is its value; a `FUNC` returns the last
 expression its body evaluated. `PRINT_RET` is the only builtin that
 prints *and* carries a value.
+
+A statement in a loop body that raises **ends the loop** and reports the error,
+exactly as one outside a loop does. It is not kept and re-tried: the condition
+would answer the same the next time too, and a script that cannot answer a
+statement inside a `WHILE` used to sit in the body collecting nothing until the
+process was killed. The practical rule for an author is the one the shape
+follows: a handler a `WHILE` body names has to be a `FUNC` the script has
+declared *above* the loop.
 
 ## A minimal script
 
@@ -98,6 +107,15 @@ A handler that raises is reported by the loop; the plan's budget is the
 one that matters. `ON_FRAME` shares the interpreter thread with every
 other handler, so a heavy computation belongs in Pd, not in the frame.
 `SET(w, "mute", true)` is the script's way to say "stop calling this one".
+
+Two kinds of registration reach that call, and the difference is a fact
+about the callable rather than a fact about whether a script is attached:
+a `Function` carries an `execute` and only the interpreter can run it, and
+a plain Python callable - a settings dialog watching its window, a test's
+`lambda` - only the bridge can. An attached `Program` is asked for the
+first and stepped over for the second; handing both to `Program.invoke`
+muted every host callable and logged "function is not callable" as if the
+project had written it.
 
 Every handler has an `OFF_` twin: `OFF_FRAME(fn)`, `OFF_PD(patch, receiver,
 [fn])`, `OFF_SERIAL(link, [fn])`, `OFF(widget[, event[, fn]])`. The widget

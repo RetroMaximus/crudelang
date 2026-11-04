@@ -14,7 +14,10 @@ Four rules carry it:
   ``invoke(func, args) -> (value, error)`` - the same duck-typing
   :mod:`crude.lang.program` uses to find a host. A test of a widget tree can hand
   over a ``lambda`` and never build an interpreter; a script's handler arrives
-  through the bindings and is called the other way.
+  through the bindings and is called the other way. Which of the two a registration
+  is, is read off the callable - a script function carries an ``execute`` and a host
+  callable does not - so a ``lambda`` the toolkit registered itself runs directly
+  whether or not a project's script is attached to the same window.
 * **Arguments are the event's, and then the event's name.** A change hands over
   ``(value, prop, "change")`` and a click ``(region, x, y, button, "click")``. A
   handler is called with as many as it was written to take, which is what lets the
@@ -25,7 +28,10 @@ Four rules carry it:
   ``NULL`` when nothing narrowed it.
 * **A raising handler is not a raising frame.** Three consecutive failures mute one
   handler, say so in the log, and keep the frame: the plan's painter answer, run
-  through the same numbers ``crude.pd.runtime`` uses for ``ON_PD``.
+  through the same numbers ``crude.pd.runtime`` uses for ``ON_PD``. One exception is
+  let through rather than counted: :class:`~crude.errors.ExitRequest`, because a
+  script asking the run to stop is control flow and the loop is the only caller that
+  knows what the code it carries means.
 * **A link is plumbing, not a handler.** ``LINK_VALUE`` mirrors a prop onto another
   widget *before* the script's handler sees the change, and both directions are
   guarded twice over - a value that would not move is not written, and a chain
@@ -48,6 +54,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..errors import ExitRequest
 from .base import Renderer, UIError
 from .paint import Canvas, PaintList, in_region, region_of
 from .skin import Skin
@@ -230,8 +237,9 @@ class Handlers:
                  log: Optional[Callable[[str], Any]] = None,
                  *, name: str = "ui",
                  paints: Optional[PaintList] = None) -> None:
-        #: whatever has ``invoke(func, args) -> (value, error)``; ``None`` means a
-        #  plain Python callable is called directly, which is how a test wires this
+        #: whatever has ``invoke(func, args) -> (value, error)``; only registrations
+        #  that are script functions are handed to it, and a plain Python callable is
+        #  always called directly - by a test, and by the toolkit's own handlers
         self.program = program
         #: which window this bridge belongs to, so a log line says where it came from
         self.name = str(name or "ui")
@@ -587,15 +595,31 @@ class Handlers:
         value: Any = None
         error: Any = None
         invoke = getattr(self.program, "invoke", None)
+        # two kinds of registration reach here, and the choice between them is a
+        # fact about the callable, not a fact about whether a script is attached:
+        # a script's ``FUNC`` can only be run by the interpreter, and a host
+        # callable - a settings dialog watching its window - can only be run here.
+        # Asking the program first handed the host function to ``invoke`` in every
+        # real run, and ``invoke`` answers "function is not callable" for anything
+        # with no ``execute``, so the dialog stopped following the window and the
+        # bridge logged a bug that was its own rather than the project's.
+        script = hasattr(handler.func, "execute")
         # the widget this registration belongs to, for the length of the call only:
         # ``SENDER()`` reads the end of the stack, and a handler that fires another
         # sees the inner registration while it runs and this one afterwards
         self._senders.append(handler.widget)
         try:
-            if callable(invoke):
+            if script and callable(invoke):
                 value, error = invoke(handler.func, list(said))
             elif callable(handler.func):
                 value = handler.func(*said)
+        except ExitRequest:
+            # ``EXIT`` from a widget handler - a menu's Quit row, a button on a stop
+            # page - is the script asking the run to end, which is the one failure a
+            # frame is not allowed to absorb: counted as an error here it would mute
+            # the row that asked, log a bug that never happened, and leave a window
+            # that will not close. The ``finally`` still puts the sender stack back.
+            raise
         except Exception as exc:  # a script handler must not outlive the frame
             error = exc
         finally:

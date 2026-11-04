@@ -33,6 +33,7 @@ from crude.errors import (
     EXIT_SCRIPT,
 )
 from crude.pd import FakeLibpd
+from crude.ui import KINDS, define, get_kind, registered_names, reset
 from crude.project import (
     CHECK_PHASES,
     IMAGE,
@@ -66,6 +67,12 @@ from crude.project import (
 NO_BACKEND = object()
 
 SCRIPT = 'PRINT("hello from the entry script")\n'
+
+#: a script that defines a kind for itself: one statement per line, as the
+#: language insists, so the whole ``PROP_DEFINE`` is on its own line
+KIND_SCRIPT = ('WIDGET_DEFINE("badge", "panel", "", "a lit name tag")\n'
+               'VAR made = PROP_DEFINE("badge", "lit", "bool", 0, "", "", "", "lit?")\n'
+               'PRINT(made)\n')
 
 
 # --------------------------------------------------------------------------
@@ -149,6 +156,18 @@ def no_project_holds_a_log_open():
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
             handler.close()
+
+
+@pytest.fixture(autouse=True)
+def no_script_kind_outlives_its_run():
+    """Hand the script-kind table back, because these tests run entry scripts.
+
+    A kind ``WIDGET_DEFINE`` registers lives in a table that is global to the
+    process, so a test that let one out would change what the next test's project
+    can call itself a name that is already taken.
+    """
+    yield
+    reset()
 
 
 @pytest.fixture
@@ -955,6 +974,42 @@ def test_a_script_that_breaks_when_it_runs_is_a_script_error(loaded):
 
     assert caught.value.exit_code == EXIT_SCRIPT
     assert str(caught.value).startswith("main.crude:")
+
+
+def test_a_second_run_of_a_project_redefines_its_own_kind(loaded):
+    """A script kind lives for one run, so a project run twice is run once twice.
+
+    The kind table is global to the process, so without a run boundary a project
+    that says ``WIDGET_DEFINE("badge", ...)`` would be refused *its own* kind by
+    the run of itself that has just finished - which is exactly what the CI matrix
+    does when it takes one example through three modes, and what a UI test does
+    when it stages one example again for every case it checks.
+    """
+    project = loaded(files={"main.crude": KIND_SCRIPT})
+
+    project.run_script()
+    project.run_script()
+
+    assert registered_names() == ("badge",)
+    assert KINDS["badge"].script is True
+    assert KINDS["badge"].base == "panel"
+
+
+def test_a_run_forgets_the_kind_the_previous_program_defined(loaded):
+    """A name an earlier program held is not this project's collision to keep.
+
+    The boundary is the run and not the definition: whatever the last program left
+    in the table is gone before this one starts, so a project cannot be refused a
+    kind by a project that is not on screen any more.
+    """
+    held = define("badge", base="panel", hint="someone else's name tag")
+    assert registered_names() == ("badge",)
+
+    loaded(files={"main.crude": KIND_SCRIPT}).run_script()
+
+    assert registered_names() == ("badge",)
+    assert get_kind("badge").hint != held.hint
+    assert get_kind("badge").has("label")
 
 
 # --------------------------------------------------------------------------

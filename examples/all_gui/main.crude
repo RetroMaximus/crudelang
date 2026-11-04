@@ -1,0 +1,3156 @@
+# main.crude: every widget kind this toolkit has, shown on the page it belongs to.
+#
+# Six scenes, and the rule the tests hold them to is that the catalog and the
+# pages cannot disagree: ``crude.ui.props.KINDS`` has twenty-four kinds today and
+# every one of them is built somewhere in this file, so the day a twenty-fifth
+# lands the coverage test fails until it is shown. ``VAR PAGES`` is the list that
+# makes the count possible - a scene that is not on screen is not under the
+# window's root either, so a test that walked only what is visible would silently
+# under-count, and this example exists to be counted.
+#
+#   root      the deck: four groups in a dockable grid, and the group verbs
+#   controls  one of every kind that holds a value, plus links, focus and keys
+#   layout    the geometry verbs, shown as what they do rather than as a list
+#   canvases  the five that draw a picture instead of a control
+#   custom    a kind this script defines for itself, painted and hit-tested
+#   help      the same words again, in the page's own widget
+#
+# It is UI-only on purpose. There is no PATCH, no Pd object and no serial link
+# here, so every control's answer is visible *on the page* it is on: a readout,
+# the control it is linked to, a line in the action log, a canvas that redraws. A
+# showcase whose knobs went to a voice nobody asked for would be decoration.
+# Pd wiring is demonstrated by ``metronome`` and ``fm_synth``, and the recorder is
+# its own example - the ``clip`` appears here as a widget with a loop pair of
+# marks, not as a recording app.
+#
+# Two rules the pages are built to, both of them a person's rather than the
+# toolkit's: no dial is big, and no word is ever clipped. Every label and every
+# readout below was measured against the box it is painted in before it was
+# written, which is the one thing a page of examples can do that a page of
+# documentation cannot.
+#
+# Run it:   python -m crude run examples/all_gui
+# Check it: python -m crude check examples/all_gui
+#           Without a window or a device:
+#           python -m crude run examples/all_gui --mode headless --frames 3 \
+#               --no-audio --progress none
+
+# -- scaffolding --------------------------------------------------------
+#
+# ``PAGES`` is each scene's top panel, including the scenes that are off screen.
+# ``ACTS`` is the action log every page writes to; it lives on the canvases page
+# because a scene's widgets leave the tree when it is hidden, so a status bar
+# cannot be shared across scenes and each page carries its own caption instead.
+VAR PAGES   = []
+VAR ACTS    = []
+VAR ACT_LOG = null
+VAR ACT_MAX = 120
+
+# A row of words has to be as tall as the font it is painted in, or the bottom of
+# the word is cut - which is the one thing this example is not allowed to do. The
+# skin has four font tokens, 18, 13, 11 and 9 px, and the measure returns one and a
+# quarter of the size, and the word is drawn one pixel inside the top of its row:
+# a title needs 24, plain words need 18, and a caption or a hint needs 16 - not the
+# 14 its 13.75 px suggests, because the extra pixel is spent below the baseline.
+# Every text widget in this file is placed against one of the three rather than
+# against a number that looked tidy, and the test measures the painted strings
+# against the plate they landed in.
+VAR LINE_TITLE = 24
+VAR LINE_TEXT  = 18
+VAR LINE_SMALL = 16
+
+# the caption of the page a person is looking at, and the one log every page
+# writes into. Two helpers instead of forty call sites because the sentence a
+# widget is asked to say is the same sentence everywhere: say the thing, and keep
+# a record of it.
+FUNC say(where, line)
+    IF where != null THEN
+        SET(where, "label", line)
+    END
+    note(line)
+    RETURN line
+END
+
+# one row per action, with the second it happened at on the front. The log holds
+# the newest ``ACT_MAX`` so a long session cannot grow a ``LOGVIEW`` forever, and
+# the rows are written back as a list rather than pushed one at a time, which is
+# the only shape that prop has.
+FUNC note(line)
+    VAR row = STR(ROUND(TIME() * 100) / 100) + "s  " + line
+    APPEND(ACTS, row)
+    IF LEN(ACTS) > ACT_MAX THEN
+        POP(ACTS, 0)
+    END
+    IF ACT_LOG != null THEN
+        SET(ACT_LOG, "lines", ACTS)
+    END
+    RETURN row
+END
+
+# a number as two decimals and no more: a slider's answer is a float the pointer
+# left behind, and ``0.4838709677419355`` is not a readout, it is an arithmetic.
+FUNC two(v)
+    RETURN STR(ROUND(v * 100) / 100)
+END
+
+FUNC whole(v)
+    RETURN STR(ROUND(v))
+END
+
+# a number and the thing it counts, agreeing with each other. One sample and seven
+# hundred samples are the same readout, and a page whose words are wrong in number is
+# as wrong as one whose words are cut off - which this example is measured for.
+FUNC count(word, n)
+    VAR said = whole(n) + " " + word
+    IF ROUND(n) == 1 THEN
+        RETURN said
+    END
+    RETURN said + "s"
+END
+
+# a list of words as one sentence. There is no ``JOIN`` in the language, so the
+# loop is written out here rather than claimed by a widget - which is also the
+# honest shape for the custom page below: a kind's row list is printed with this,
+# and a list of three is a row a person can read in one line.
+FUNC joined(rows, sep)
+    VAR said = ""
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        VAR said = said + STR(AT(rows, i))
+        IF i < LEN(rows) - 1 THEN
+            VAR said = said + sep
+        END
+        VAR i = i + 1
+    END
+    RETURN said
+END
+
+FUNC holds(rows, wanted)
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        IF AT(rows, i) == wanted THEN
+            RETURN 1
+        END
+        VAR i = i + 1
+    END
+    RETURN 0
+END
+
+# -- the deck: the window's own scene -----------------------------------
+#
+# The root scene is the workspace/group showcase proper. Four sections in three
+# columns is six cells, so two cells exist as somewhere to drop and one is left
+# free while the four are where they started. ``Style`` is *not* dockable, which
+# is what gives ``GROUP_DOCK`` a real refusal to report rather than a rule nobody
+# tested - and a hand that drags its header gets the answer the other way round:
+# the group does not move, because a pointer is not a request.
+VAR deck     = PANEL("")
+VAR verbs    = PANEL("")
+VAR deck_cap = TEXT("four sections, three columns, cells 4 and 5 free")
+
+VAR g_move   = GROUP("Movement", deck)
+VAR g_value  = GROUP("Values", deck)
+VAR g_style  = GROUP("Style", deck)
+VAR g_signal = GROUP("Signals", deck)
+
+# section one: which section the rows under the grid act on. The verbs are one
+# set of buttons rather than four sets of four, so what a person is looking at is
+# always the section named in the strip.
+VAR m_note   = TEXT("the rows below act on this one")
+VAR m_pick   = RADIO(["Movement", "Values", "Style", "Signals"], 0)
+VAR m_drag   = TEXT("a header drags; a chevron folds")
+VAR m_out    = TEXT("")
+
+# section two: three controls that answer each other, so the section is a panel
+# and not a list. The two dials are small and both of their words go inside the
+# plate, which is the only way a 1148 px page fits four columns of them.
+VAR v_slide  = SLIDER("Level", 0, 1, 0.5)
+VAR v_pair   = PANEL("")
+VAR v_tone   = KNOB("Tone", 0, 100, 50)
+VAR v_depth  = KNOB("Depth", 0, 1, 0.5)
+VAR v_out    = TEXT("")
+
+# section three: the one thing a window can restyle without a second verb. There
+# is no font or scale word in the language, so this is the honest answer to
+# "change how it looks" - the theme, which re-resolves every metric in the tree.
+VAR s_theme  = DROPDOWN(["dark", "flat", "light"], 0)
+VAR s_row    = PANEL("")
+VAR s_gear   = ICON("gear", 32)
+VAR s_note   = TEXT("STYLE() takes a theme name")
+VAR s_out    = TEXT("")
+
+# section four: two meters, the input and the output, fed from the audio every
+# frame. A silent run draws them at zero, which is the true picture of a machine
+# with nothing plugged in rather than a demo waveform someone was afraid to leave
+# out.
+VAR g_row    = PANEL("")
+VAR in_meter  = METER("in", 0, 1, 0)
+VAR out_meter = METER("out", 0, 1, 0)
+VAR sig_note = TEXT("AUDIO_LEVEL, one read per frame")
+VAR sig_out  = TEXT("")
+
+# the verb rows: one button per group verb, and every one of them says what came
+# back - the cell it took, the position it landed on, the refusal it was given.
+VAR row_one  = PANEL("")
+VAR row_two  = PANEL("")
+VAR b_fold   = BUTTON("Fold / open")
+VAR b_up     = BUTTON("Up")
+VAR b_down   = BUTTON("Down")
+VAR b_first  = BUTTON("First")
+VAR b_four   = BUTTON("Dock to 4")
+VAR b_five   = BUTTON("Dock to 5")
+VAR b_off    = BUTTON("Undock")
+VAR b_all    = BUTTON("Fold all")
+VAR b_open   = BUTTON("Open all")
+VAR b_fill   = BUTTON("Free cell")
+VAR b_read   = BUTTON("Re-read")
+
+# the boxes, then the tree: PLACE is read against the parent a NODE_ADD chooses,
+# so a widget that was never added to its panel would be placed against the
+# window and land on top of the section it was meant to sit inside.
+PLACE(deck, 16, 44, 1148, 420)
+PLACE(verbs, 16, 480, 1148, 60)
+PLACE(deck_cap, 16, 552, 1148, 20)
+PLACE(row_one, 0, 0, 1148, 26)
+PLACE(row_two, 0, 0, 1148, 26)
+PACK(deck, "fill", "fixed")
+PACK(verbs, "fill", "fixed")
+PACK(deck_cap, "fill", "fixed")
+PAD(deck, 0)
+PAD(verbs, 0)
+
+# the deck is the root scene's own panel, and the root is the window: the four
+# glues are why a resize needs no second pass here, and why the top offset is 44
+# rather than whatever the menu bar's height happens to be plus eight.
+ANCHOR(deck, "left", "parent", "left", 16)
+ANCHOR(deck, "right", "parent", "right", -16)
+ANCHOR(deck, "top", "parent", "top", 44)
+ANCHOR(deck, "bottom", verbs, "top", -12)
+ANCHOR(verbs, "left", "parent", "left", 16)
+ANCHOR(verbs, "right", "parent", "right", -16)
+ANCHOR(verbs, "bottom", deck_cap, "top", -10)
+ANCHOR(deck_cap, "left", "parent", "left", 16)
+ANCHOR(deck_cap, "right", "parent", "right", -16)
+ANCHOR(deck_cap, "bottom", "parent", "bottom", -16)
+
+APPEND(PAGES, deck)
+
+# three columns, eighteen pixels between them, and the offer of a cell to drop
+# into: the cells this grid arranges and the cells a drop reads are measured by
+# the same GridSpec, so the two halves cannot disagree about how many there are.
+GRID(deck, 3, 18, ["align", "start", "dockable", 1])
+PACK(g_move, "fill", "fixed")
+PACK(g_value, "fill", "fixed")
+PACK(g_style, "fill", "fixed")
+PACK(g_signal, "fill", "fixed")
+SET(g_move, "dockable", 1)
+SET(g_value, "dockable", 1)
+SET(g_signal, "dockable", 1)
+# Style keeps the default the table gives it - not dockable - and says so rather
+# than being given a second flag to lie with.
+
+# every section lays its own body out in a column: the group measures its height
+# from the rows it holds, so no number below is the section's height.
+VSTACK(g_move, 8, ["align", "stretch"])
+VSTACK(g_value, 8, ["align", "stretch"])
+VSTACK(g_style, 8, ["align", "stretch"])
+VSTACK(g_signal, 8, ["align", "stretch"])
+PAD(v_pair, 0)
+PAD(s_row, 0)
+PAD(g_row, 0)
+PAD(row_one, 0)
+PAD(row_two, 0)
+HSTACK(v_pair, 16, ["align", "center"])
+HSTACK(s_row, 12, ["align", "start"])
+HSTACK(g_row, 12, ["align", "stretch"])
+VSTACK(verbs, 8, ["align", "stretch"])
+HSTACK(row_one, 8, ["align", "start"])
+HSTACK(row_two, 8, ["align", "start"])
+
+PLACE(m_note, 0, 0, 358, LINE_SMALL)
+PLACE(m_pick, 0, 0, 358, 26)
+PLACE(m_drag, 0, 0, 358, LINE_SMALL)
+PLACE(m_out, 0, 0, 358, LINE_TEXT)
+NODE_ADD(g_move, m_note)
+NODE_ADD(g_move, m_pick)
+NODE_ADD(g_move, m_drag)
+NODE_ADD(g_move, m_out)
+
+PLACE(v_slide, 0, 0, 358, 26)
+PLACE(v_pair, 0, 0, 358, 88)
+PLACE(v_tone, 0, 0, 100, 88)
+PLACE(v_depth, 0, 0, 100, 88)
+PLACE(v_out, 0, 0, 358, LINE_TEXT)
+NODE_ADD(g_value, v_slide)
+NODE_ADD(g_value, v_pair)
+NODE_ADD(g_value, v_out)
+NODE_ADD(v_pair, v_tone)
+NODE_ADD(v_pair, v_depth)
+
+PLACE(s_theme, 0, 0, 358, 26)
+PLACE(s_row, 0, 0, 358, 32)
+PLACE(s_gear, 0, 0, 32, 32)
+PLACE(s_note, 0, 0, 320, LINE_SMALL)
+PLACE(s_out, 0, 0, 358, LINE_TEXT)
+NODE_ADD(g_style, s_theme)
+NODE_ADD(g_style, s_row)
+NODE_ADD(g_style, s_out)
+NODE_ADD(s_row, s_gear)
+NODE_ADD(s_row, s_note)
+PACK(s_note, "grow", "fixed")
+
+PLACE(in_meter, 0, 0, 170, 26)
+PLACE(out_meter, 0, 0, 170, 26)
+PLACE(sig_note, 0, 0, 358, LINE_SMALL)
+PLACE(sig_out, 0, 0, 358, LINE_TEXT)
+NODE_ADD(g_signal, g_row)
+NODE_ADD(g_signal, sig_note)
+NODE_ADD(g_signal, sig_out)
+NODE_ADD(g_row, in_meter)
+NODE_ADD(g_row, out_meter)
+
+PLACE(b_fold, 0, 0, 150, 26)
+PLACE(b_up, 0, 0, 150, 26)
+PLACE(b_down, 0, 0, 150, 26)
+PLACE(b_first, 0, 0, 150, 26)
+PLACE(b_four, 0, 0, 150, 26)
+PLACE(b_five, 0, 0, 150, 26)
+PLACE(b_off, 0, 0, 150, 26)
+NODE_ADD(verbs, row_one)
+NODE_ADD(verbs, row_two)
+NODE_ADD(row_one, b_fold)
+NODE_ADD(row_one, b_up)
+NODE_ADD(row_one, b_down)
+NODE_ADD(row_one, b_first)
+NODE_ADD(row_one, b_four)
+NODE_ADD(row_one, b_five)
+NODE_ADD(row_one, b_off)
+
+PLACE(b_all, 0, 0, 150, 26)
+PLACE(b_open, 0, 0, 150, 26)
+PLACE(b_fill, 0, 0, 150, 26)
+PLACE(b_read, 0, 0, 150, 26)
+NODE_ADD(row_two, b_all)
+NODE_ADD(row_two, b_open)
+NODE_ADD(row_two, b_fill)
+NODE_ADD(row_two, b_read)
+
+# a radio strip is only a strip when it says how many columns it has, and the
+# dials keep their two words inside the plate rather than overflowing it
+SET(m_pick, "columns", 4)
+SET(v_tone, "label_place", "inside")
+SET(v_tone, "value_place", "inside")
+SET(v_depth, "label_place", "inside")
+SET(v_depth, "value_place", "inside")
+SET(v_tone, "decimals", 0)
+SET(v_depth, "decimals", 2)
+SET(m_note, "role", "caption")
+SET(m_drag, "role", "caption")
+SET(s_note, "role", "caption")
+SET(sig_note, "role", "caption")
+SET(deck_cap, "role", "caption")
+SET(s_gear, "tooltip", "the icon is a glyph, not a file")
+
+# the four sections, and each one's own readout, kept as two lists walked by
+# identity: ``GROUPS`` answers in draw order and a ``GROUP_MOVE`` changes the
+# draw order, so a readout looked up by index would end up reporting the numbers
+# of the section that moved into its slot.
+VAR ON_DECK  = []
+VAR DECK_OUT = []
+APPEND(ON_DECK, g_move)
+APPEND(ON_DECK, g_value)
+APPEND(ON_DECK, g_style)
+APPEND(ON_DECK, g_signal)
+APPEND(DECK_OUT, m_out)
+APPEND(DECK_OUT, v_out)
+APPEND(DECK_OUT, s_out)
+APPEND(DECK_OUT, sig_out)
+
+FUNC readout_for(held)
+    VAR i = 0
+    WHILE i < LEN(ON_DECK) THEN
+        VAR row = AT(ON_DECK, i)
+        IF row == held THEN
+            RETURN AT(DECK_OUT, i)
+        END
+        VAR i = i + 1
+    END
+    RETURN null
+END
+
+FUNC word(held)
+    RETURN GET(held, "title")
+END
+
+FUNC dock_word(held)
+    IF GET(held, "dockable") > 0 THEN
+        RETURN "dockable"
+    END
+    RETURN "not dockable"
+END
+
+# the two numbers the arrangement answers with, read back into the section they
+# describe. ``cell`` is -1 until a pass has put a group in one, and the pass is
+# the layout's own: nothing here guesses at a rectangle it did not measure.
+FUNC refresh_cells()
+    VAR rows = GROUPS(deck)
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        VAR held = AT(rows, i)
+        VAR out = readout_for(held)
+        IF out != null THEN
+            VAR line = "cell " + whole(GET(held, "cell"))
+            VAR line = line + " - order " + whole(GET(held, "order"))
+            VAR line = line + " - " + dock_word(held)
+            SET(out, "label", line)
+        END
+        VAR i = i + 1
+    END
+    RETURN LEN(rows)
+END
+
+FUNC cell_count()
+    RETURN CLAMP(GET(deck, "grid_columns") * GET(deck, "grid_rows"), 0, 24)
+END
+
+FUNC chosen()
+    VAR at = CLAMP(GET(m_pick, "value"), 0, LEN(ON_DECK) - 1)
+    RETURN AT(ON_DECK, at)
+END
+
+# who is drawn in each cell, in one list. The question is asked before the call,
+# because ``GROUP_DOCK`` *raises* to name its refusal and a showcase that reported
+# an engine error as its own caption would be logging a bug rather than showing a
+# rule - so the three facts the verb checks are checked here and said in the same
+# words. Reading ``GET(g, "cell")`` alone is not enough: a group that gave its cell
+# up is drawn in one all the same, and the pass has not had a frame to say which.
+# This is the arrangement's own walk - claims first in draw order, then the rest
+# into the free cells in draw order - written out so a refusal can be quoted.
+FUNC next_free(held, from, total)
+    VAR i = from
+    WHILE i < total THEN
+        IF AT(held, i) == null THEN
+            RETURN i
+        END
+        VAR i = i + 1
+    END
+    RETURN -1
+END
+
+FUNC cell_owners()
+    VAR rows = GROUPS(deck)
+    VAR total = cell_count()
+    VAR held = []
+    VAR i = 0
+    WHILE i < total THEN
+        APPEND(held, null)
+        VAR i = i + 1
+    END
+    IF LEN(held) == 0 THEN
+        RETURN held
+    END
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        VAR here = AT(rows, i)
+        VAR cell = GET(here, "cell")
+        IF cell >= 0 AND cell < total AND AT(held, FLOOR(cell)) == null THEN
+            SET_AT(held, FLOOR(cell), here)
+        END
+        VAR i = i + 1
+    END
+    VAR cursor = 0
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        VAR here = AT(rows, i)
+        VAR cell = GET(here, "cell")
+        VAR mine = 0
+        IF cell >= 0 AND here == AT(held, FLOOR(CLAMP(cell, 0, total - 1))) THEN
+            VAR mine = 1
+        END
+        IF mine == 0 THEN
+            VAR free = next_free(held, cursor, total)
+            IF free >= 0 THEN
+                SET_AT(held, free, here)
+                VAR cursor = free + 1
+            END
+        END
+        VAR i = i + 1
+    END
+    RETURN held
+END
+
+FUNC cell_owner(wanted)
+    VAR held = cell_owners()
+    IF wanted < 0 OR wanted >= LEN(held) THEN
+        RETURN null
+    END
+    RETURN AT(held, wanted)
+END
+
+FUNC held_cell(wanted, skip)
+    VAR owner = cell_owner(wanted)
+    IF owner == null THEN
+        RETURN 0
+    END
+    IF owner == skip THEN
+        RETURN 0
+    END
+    RETURN 1
+END
+
+FUNC verb_fold()
+    VAR held = chosen()
+    VAR now = GROUP_FOLD(held)
+    refresh_cells()
+    IF now > 0 THEN
+        say(deck_cap, word(held) + " folded to its header")
+    ELSE
+        say(deck_cap, word(held) + " opened, and its body is measured again")
+    END
+    RETURN now
+END
+
+FUNC verb_up()
+    VAR held = chosen()
+    VAR at = GROUP_UP(held)
+    refresh_cells()
+    say(deck_cap, word(held) + " is drawn at position " + whole(at))
+    RETURN at
+END
+
+FUNC verb_down()
+    VAR held = chosen()
+    VAR at = GROUP_DOWN(held)
+    refresh_cells()
+    say(deck_cap, word(held) + " is drawn at position " + whole(at))
+    RETURN at
+END
+
+FUNC verb_first()
+    VAR held = chosen()
+    VAR at = GROUP_MOVE(held, 0)
+    refresh_cells()
+    say(deck_cap, word(held) + " is first; the grid re-reads the list")
+    RETURN at
+END
+
+FUNC verb_dock(wanted)
+    VAR held = chosen()
+    IF GET(held, "dockable") == 0 THEN
+        say(deck_cap, word(held) + " is not dockable, so nothing picks it up")
+        RETURN -1
+    END
+    IF wanted < 0 OR wanted >= cell_count() THEN
+        VAR line = "the grid has " + whole(cell_count()) + " cells, and "
+        VAR line = line + STR(wanted) + " is not one of them"
+        say(deck_cap, line)
+        RETURN -1
+    END
+    IF held_cell(wanted, held) > 0 THEN
+        VAR owner = cell_owner(wanted)
+        VAR line = "cell " + STR(wanted) + " already holds " + word(owner)
+        say(deck_cap, line + " - a cell is not a stack")
+        RETURN -1
+    END
+    VAR at = GROUP_DOCK(held, wanted, deck)
+    refresh_cells()
+    say(deck_cap, word(held) + " docked into cell " + whole(at))
+    RETURN at
+END
+
+FUNC verb_undock()
+    VAR held = chosen()
+    VAR at = GROUP_UNDOCK(held)
+    refresh_cells()
+    VAR line = word(held) + " gave up its cell and sits after its siblings"
+    say(deck_cap, line + " - now cell " + whole(at))
+    RETURN at
+END
+
+FUNC verb_fold_all(wanted)
+    VAR rows = GROUPS(deck)
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        GROUP_FOLD(AT(rows, i), wanted)
+        VAR i = i + 1
+    END
+    IF wanted > 0 THEN
+        say(deck_cap, STR(i) + " sections folded to their headers")
+    ELSE
+        say(deck_cap, STR(i) + " sections open, each measured from its rows")
+    END
+    RETURN i
+END
+
+# the cells nobody is drawn in, said as a list. ``cell_owners`` is the walk; this
+# is the sentence a person reads next to it.
+FUNC free_words()
+    VAR held = cell_owners()
+    VAR said = ""
+    VAR i = 0
+    WHILE i < LEN(held) THEN
+        IF AT(held, i) == null THEN
+            IF said != "" THEN
+                VAR said = said + ", "
+            END
+            VAR said = said + STR(i)
+        END
+        VAR i = i + 1
+    END
+    IF said == "" THEN
+        RETURN "none"
+    END
+    RETURN said
+END
+
+FUNC verb_free()
+    VAR held = chosen()
+    IF GET(held, "dockable") == 0 THEN
+        say(deck_cap, word(held) + " is not dockable, so nothing picks it up")
+        RETURN -1
+    END
+    VAR wanted = next_free(cell_owners(), 0, cell_count())
+    IF wanted < 0 THEN
+        VAR line = "no cell is free; " + STR(LEN(GROUPS(deck)))
+        VAR line = line + " sections hold all " + STR(cell_count())
+        say(deck_cap, line)
+        RETURN -1
+    END
+    VAR at = GROUP_DOCK(held, wanted, deck)
+    refresh_cells()
+    say(deck_cap, word(held) + " took the first free cell, " + whole(at))
+    RETURN at
+END
+
+# the one thing a window can restyle from a script: the theme, which re-resolves
+# every metric in the tree. There is no font or scale verb in the language, so a
+# second word here would be a row that did nothing when it was clicked.
+FUNC verb_theme(v)
+    VAR names = ["dark", "flat", "light"]
+    VAR at = CLAMP(v, 0, LEN(names) - 1)
+    VAR said = STYLE(AT(names, at))
+    say(deck_cap, "STYLE(" + said + ") - the whole tree re-resolves")
+    RETURN said
+END
+
+# one read of the stream per frame, and the two bars are what it said. A silent
+# machine answers ``0`` and the meters sit at the bottom of their scale, which is
+# the true picture of nothing plugged in - the alternative is a fake signal that
+# looks alive on a machine that is not making any sound.
+FUNC verb_meters()
+    VAR left = AUDIO_LEVEL(0, "rms", "input")
+    VAR right = AUDIO_LEVEL(0, "rms", "output")
+    SET(in_meter, "value", left)
+    SET(out_meter, "value", right)
+    VAR line = "in " + two(left) + " - out " + two(right)
+    SET(sig_out, "label", line)
+    RETURN line
+END
+
+FUNC verb_read()
+    VAR line = "GROUPS reads " + STR(refresh_cells())
+    VAR line = line + " sections in draw order"
+    RETURN say(deck_cap, line)
+END
+
+# -- the deck's answers -------------------------------------------------
+
+ON_CLICK(b_fold, verb_fold)
+ON_CLICK(b_up, verb_up)
+ON_CLICK(b_down, verb_down)
+ON_CLICK(b_first, verb_first)
+ON_CLICK(b_four, FUNC() -> verb_dock(4))
+ON_CLICK(b_five, FUNC() -> verb_dock(5))
+ON_CLICK(b_off, verb_undock)
+ON_CLICK(b_all, FUNC() -> verb_fold_all(1))
+ON_CLICK(b_open, FUNC() -> verb_fold_all(0))
+ON_CLICK(b_fill, verb_free)
+ON_CLICK(b_read, verb_read)
+
+ON_CHANGE(m_pick, FUNC(v) -> say(deck_cap, "the rows act on " + word(chosen())))
+
+# the three controls in ``Values`` answer each other: the strip picks the theme
+# and the two dials read out what they hold, so nothing in the section is inert.
+ON_CHANGE(s_theme, verb_theme)
+ON_CHANGE(v_slide, FUNC(v) -> SET(v_out, "label", "Level " + two(v)))
+ON_CHANGE(v_tone, FUNC(v) -> SET(v_out, "label", "Tone " + whole(v)))
+ON_CHANGE(v_depth, FUNC(v) -> SET(v_out, "label", "Depth " + two(v)))
+
+# ``cell`` and ``order`` are answers the layout pass writes, and a verb only moves
+# a section - the rectangle it lands in is decided on the next frame. Reading them
+# back once a frame is the honest way to show them: a caption that quoted the
+# number the script asked for would be reporting an intention rather than a fact.
+ON_FRAME(FUNC() -> refresh_cells())
+ON_FRAME(verb_meters)
+
+# -- the controls page --------------------------------------------------
+#
+# Sixteen kinds hold a value, and this page holds all sixteen: three or more to a
+# panel, so no section is a box of one control, and every one of them answers on
+# the page it is on - a readout in its own panel, the control it is linked to, a
+# row that goes and comes back, a glyph that changes. Nothing here reaches a
+# voice, because there is no patch to reach: the answer a control gives *is* the
+# answer, which is what makes it watchable from a test.
+#
+# The third band is the one the brief's standing rule lives in. Five dials take
+# the five ``label_place`` words in turn and a sixth hides its label, each in the
+# margin its own placement needs; every dial elsewhere on the page keeps both its
+# words inside the plate, at the recorder's 100 x 88.
+VAR c_scene = WORKSPACE("controls")
+VAR c_page  = PANEL("")
+
+# band one, left to right: presses, ranges, choices
+VAR p_press   = PANEL("")
+VAR c_t1      = TEXT("Words and presses")
+VAR c_text    = TEXT("a line of words, in a role of its own")
+VAR c_row1    = PANEL("")
+VAR c_btn     = BUTTON("Press me")
+VAR c_tog     = TOGGLE("Latch", 0)
+VAR c_icon    = ICON("record", 32)
+VAR c_out1    = TEXT("")
+VAR c_hover   = TEXT("a button says when the pointer comes and goes")
+
+VAR p_range   = PANEL("")
+VAR c_t2      = TEXT("Ranges, and a linked pair")
+VAR c_slid    = SLIDER("Level", 0, 1, 0.5)
+VAR c_row2    = PANEL("")
+VAR c_vsl     = VSLIDER("Gain", 0, 1, 0.6)
+VAR c_knb     = KNOB("Tone", 0, 1, 0.5)
+VAR c_num     = NUMBER("Freq", 20, 20000, 440)
+VAR c_out2    = TEXT("")
+
+VAR p_choice  = PANEL("")
+VAR c_t3      = TEXT("Choices")
+VAR c_radio   = RADIO(["Analog", "FM", "Wavetable", "Noise"], 0)
+VAR c_drop    = DROPDOWN(["Small", "Medium", "Large"], 1)
+VAR c_out3    = TEXT("")
+
+# band two: the four that draw a shape rather than a handle, and the two levels
+VAR p_shape   = PANEL("")
+VAR c_t4      = TEXT("Machines and levels")
+VAR c_row3    = PANEL("")
+VAR c_xy      = XY_PAD("Pad", 0.5, 0.5)
+VAR c_keys    = KEYBED("Keys", 60, 2)
+VAR c_adsr    = ADSR("Envelope", 0.01, 0.2, 0.6, 0.4)
+VAR c_curve   = CURVE("Shape", 0)
+VAR c_row4    = PANEL("")
+VAR c_meter   = METER("Peak", 0, 1, 0.35)
+VAR PRESETS   = RESOURCES("preset")
+VAR c_bar     = PRESET_BAR(PRESETS, 0)
+VAR c_pre     = TEXT("the bar lists the files the manifest declares")
+VAR c_out4    = TEXT("")
+
+# band three: every way a word can be placed on a control
+VAR p_place   = PANEL("")
+VAR c_t5      = TEXT("label_place")
+VAR r_in      = KNOB("Inside", 0, 1, 0.5)
+VAR r_top     = KNOB("Top", 0, 1, 0.4)
+VAR r_bot     = KNOB("Bottom", 0, 1, 0.4)
+VAR r_left    = KNOB("Left", 0, 1, 0.4)
+VAR r_right   = KNOB("Right", 0, 1, 0.4)
+VAR r_none    = KNOB("Hidden", 0, 1, 0.4)
+VAR RAIL      = []
+VAR c_out5    = TEXT("")
+
+# band four: what one control can do to another, and where the keyboard goes
+VAR p_state   = PANEL("")
+VAR c_tog2    = TOGGLE("Show the note line", 1)
+VAR c_note    = TEXT("this row is shown by the toggle above it")
+VAR c_row5    = PANEL("")
+VAR c_unlink  = BUTTON("Break the mirror")
+VAR c_relink  = BUTTON("Link them again")
+VAR c_out6    = TEXT("")
+
+VAR p_keys    = PANEL("")
+VAR c_row6    = PANEL("")
+VAR c_foc     = TEXT("the keyboard is not on this page yet")
+VAR c_key     = TEXT("key: -")
+VAR c_chr     = TEXT("char: -")
+VAR c_hint    = TEXT("Tab and a click both aim the keyboard; a key reaches the widget it is aimed at")
+
+VAR c_cap     = TEXT("every control below writes here, and into the log on the canvases page")
+
+# counters live in a list, because a function's own ``VAR n = n + 1`` names a
+# fresh local rather than moving the global it read - the only mutation this
+# language has is a list element written in place.
+VAR CLOCKS = [0, 0]
+VAR GLYPHS = ["record", "stop"]
+
+FUNC counted(which)
+    VAR now = AT(CLOCKS, which) + 1
+    SET_AT(CLOCKS, which, now)
+    RETURN now
+END
+
+# one line, in one place: the panel's own readout, the page's caption, the log.
+FUNC told(out, line)
+    IF out != null THEN
+        SET(out, "label", line)
+    END
+    RETURN say(c_cap, line)
+END
+
+FUNC pick_word(held, at)
+    VAR rows = GET(held, "labels")
+    VAR index = CLAMP(FLOOR(at), 0, LEN(rows) - 1)
+    RETURN AT(rows, index)
+END
+
+# the page fills its scene, and the scene fills the window below the bar; the
+# bands are boxes the page is tall enough for, so nothing on it is placed against
+# a parent that has not been measured yet.
+PLACE(c_page, 0, 0, 1180, 688)
+PAD(c_page, 0)
+WORKSPACE_ADD(c_scene, c_page)
+APPEND(PAGES, c_page)
+
+PLACE(p_press, 6, 6, 384, 190)
+PLACE(p_range, 398, 6, 384, 190)
+PLACE(p_choice, 790, 6, 384, 190)
+PLACE(p_shape, 6, 202, 1168, 184)
+PLACE(p_place, 6, 392, 1168, 168)
+PLACE(p_state, 6, 566, 578, 100)
+PLACE(p_keys, 596, 566, 578, 100)
+PLACE(c_cap, 6, 672, 1168, LINE_SMALL)
+NODE_ADD(c_page, p_press)
+NODE_ADD(c_page, p_range)
+NODE_ADD(c_page, p_choice)
+NODE_ADD(c_page, p_shape)
+NODE_ADD(c_page, p_place)
+NODE_ADD(c_page, p_state)
+NODE_ADD(c_page, p_keys)
+NODE_ADD(c_page, c_cap)
+
+PLACE(c_row1, 0, 0, 364, 32)
+PLACE(c_row2, 0, 0, 364, 88)
+PLACE(c_row3, 0, 0, 1148, 84)
+PLACE(c_row4, 0, 0, 1148, 26)
+PLACE(c_row5, 0, 0, 558, 26)
+PLACE(c_row6, 0, 0, 558, 26)
+PLACE(c_t1, 0, 0, 364, LINE_TITLE)
+PLACE(c_text, 0, 0, 364, LINE_TEXT)
+PLACE(c_out1, 0, 0, 364, LINE_SMALL)
+PLACE(c_hover, 0, 0, 364, LINE_SMALL)
+PLACE(c_t2, 0, 0, 364, LINE_TITLE)
+PLACE(c_slid, 0, 0, 364, 26)
+PLACE(c_out2, 0, 0, 364, LINE_SMALL)
+PLACE(c_t3, 0, 0, 364, LINE_TITLE)
+PLACE(c_radio, 0, 0, 364, 56)
+PLACE(c_drop, 0, 0, 364, 26)
+PLACE(c_out3, 0, 0, 364, LINE_SMALL)
+PLACE(c_t4, 0, 0, 1148, LINE_TITLE)
+PLACE(c_out4, 0, 0, 1148, LINE_SMALL)
+PLACE(c_tog2, 0, 0, 558, 26)
+PLACE(c_note, 0, 0, 558, LINE_TEXT)
+PLACE(c_hint, 0, 0, 558, LINE_SMALL)
+PLACE(c_btn, 0, 0, 110, 26)
+PLACE(c_tog, 0, 0, 110, 26)
+PLACE(c_icon, 0, 0, 32, 32)
+PLACE(c_vsl, 0, 0, 60, 84)
+PLACE(c_knb, 0, 0, 100, 84)
+PLACE(c_num, 0, 0, 150, 26)
+PLACE(c_xy, 0, 0, 150, 84)
+PLACE(c_keys, 0, 0, 320, 84)
+PLACE(c_adsr, 0, 0, 200, 84)
+PLACE(c_curve, 0, 0, 200, 84)
+PLACE(c_meter, 0, 0, 160, 26)
+PLACE(c_bar, 0, 0, 300, 26)
+PLACE(c_pre, 0, 0, 400, LINE_SMALL)
+PLACE(c_unlink, 0, 0, 150, 26)
+PLACE(c_relink, 0, 0, 150, 26)
+PLACE(c_out6, 0, 0, 230, 26)
+PLACE(c_foc, 0, 0, 250, 26)
+PLACE(c_key, 0, 0, 140, 26)
+PLACE(c_chr, 0, 0, 140, 26)
+
+# the rail is the one panel on the page whose children are placed rather than
+# arranged: a word drawn outside a plate is a thing the layout does not know the
+# size of, so the margin each of the five needs is said here in pixels.
+PLACE(c_t5, 0, 0, 120, LINE_TITLE)
+PLACE(c_out5, 150, 4, 420, LINE_SMALL)
+PLACE(r_in, 20, 40, 100, 88)
+PLACE(r_top, 206, 40, 100, 88)
+PLACE(r_bot, 392, 40, 100, 88)
+PLACE(r_left, 578, 40, 100, 88)
+PLACE(r_right, 764, 40, 100, 88)
+PLACE(r_none, 950, 40, 100, 88)
+
+NODE_ADD(p_press, c_t1)
+NODE_ADD(p_press, c_text)
+NODE_ADD(p_press, c_row1)
+NODE_ADD(p_press, c_out1)
+NODE_ADD(p_press, c_hover)
+NODE_ADD(c_row1, c_btn)
+NODE_ADD(c_row1, c_tog)
+NODE_ADD(c_row1, c_icon)
+
+NODE_ADD(p_range, c_t2)
+NODE_ADD(p_range, c_slid)
+NODE_ADD(p_range, c_row2)
+NODE_ADD(p_range, c_out2)
+NODE_ADD(c_row2, c_vsl)
+NODE_ADD(c_row2, c_knb)
+NODE_ADD(c_row2, c_num)
+
+NODE_ADD(p_choice, c_t3)
+NODE_ADD(p_choice, c_radio)
+NODE_ADD(p_choice, c_drop)
+NODE_ADD(p_choice, c_out3)
+
+NODE_ADD(p_shape, c_t4)
+NODE_ADD(p_shape, c_row3)
+NODE_ADD(p_shape, c_row4)
+NODE_ADD(p_shape, c_out4)
+NODE_ADD(c_row3, c_xy)
+NODE_ADD(c_row3, c_keys)
+NODE_ADD(c_row3, c_adsr)
+NODE_ADD(c_row3, c_curve)
+NODE_ADD(c_row4, c_meter)
+NODE_ADD(c_row4, c_bar)
+NODE_ADD(c_row4, c_pre)
+
+NODE_ADD(p_place, c_t5)
+NODE_ADD(p_place, c_out5)
+NODE_ADD(p_place, r_in)
+NODE_ADD(p_place, r_top)
+NODE_ADD(p_place, r_bot)
+NODE_ADD(p_place, r_left)
+NODE_ADD(p_place, r_right)
+NODE_ADD(p_place, r_none)
+
+NODE_ADD(p_state, c_tog2)
+NODE_ADD(p_state, c_note)
+NODE_ADD(p_state, c_row5)
+NODE_ADD(c_row5, c_unlink)
+NODE_ADD(c_row5, c_relink)
+NODE_ADD(c_row5, c_out6)
+
+NODE_ADD(p_keys, c_row6)
+NODE_ADD(p_keys, c_hint)
+NODE_ADD(c_row6, c_foc)
+NODE_ADD(c_row6, c_key)
+NODE_ADD(c_row6, c_chr)
+
+# every row panel is a strip of the window behind it, not a card: the page already
+# has seven plates on it and a control inside a box inside a box reads as a bug.
+PAD(c_row1, 0)
+PAD(c_row2, 0)
+PAD(c_row3, 0)
+PAD(c_row4, 0)
+PAD(c_row5, 0)
+PAD(c_row6, 0)
+SET(c_row1, "role", "window")
+SET(c_row2, "role", "window")
+SET(c_row3, "role", "window")
+SET(c_row4, "role", "window")
+SET(c_row5, "role", "window")
+SET(c_row6, "role", "window")
+
+VSTACK(p_press, 6, ["align", "stretch"])
+VSTACK(p_range, 6, ["align", "stretch"])
+VSTACK(p_choice, 6, ["align", "stretch"])
+VSTACK(p_shape, 5, ["align", "stretch"])
+VSTACK(p_state, 6, ["align", "stretch"])
+VSTACK(p_keys, 6, ["align", "stretch"])
+HSTACK(c_row1, 8, ["align", "center"])
+HSTACK(c_row2, 12, ["align", "center"])
+HSTACK(c_row3, 12, ["align", "start"])
+HSTACK(c_row4, 12, ["align", "center"])
+HSTACK(c_row5, 8, ["align", "center"])
+HSTACK(c_row6, 8, ["align", "center"])
+
+# -- what the page says about itself ------------------------------------
+
+SET(c_t1, "role", "title")
+SET(c_t2, "role", "title")
+SET(c_t3, "role", "title")
+SET(c_t4, "role", "title")
+SET(c_t5, "role", "title")
+SET(c_cap, "role", "caption")
+SET(c_hover, "role", "caption")
+SET(c_hint, "role", "caption")
+SET(c_pre, "role", "caption")
+SET(c_out1, "role", "hint")
+SET(c_out2, "role", "hint")
+SET(c_out3, "role", "hint")
+SET(c_out4, "role", "hint")
+SET(c_out5, "role", "hint")
+SET(c_out6, "role", "hint")
+SET(c_foc, "role", "hint")
+SET(c_key, "role", "hint")
+SET(c_chr, "role", "hint")
+
+SET(c_radio, "columns", 2)
+SET(c_slid, "ticks", 10)
+SET(c_vsl, "step", 0.05)
+SET(c_num, "decimals", 0)
+# a range with no ``step`` answers an arrow key with one hundredth of its whole
+# span, which for 20..20000 is a jump of 199.8 - true, but not something a person
+# would call typing a number. The step is said here so the arrows and the decimals
+# agree on what one press is worth.
+SET(c_num, "step", 1)
+SET(c_keys, "velocity", 96)
+SET(c_icon, "tooltip", "an icon takes a click, and a glyph can be changed")
+SET(c_bar, "tooltip", "one row per preset file the manifest declares")
+
+# the rail: one dial per word ``label_place`` knows, each in the room the engine
+# measures for it, and a sixth that hides its label so a test can assert the word
+# is not painted at all rather than painted and cut.
+SET(r_in, "label_place", "inside")
+SET(r_in, "value_place", "inside")
+SET(r_top, "label_place", "top")
+SET(r_top, "value_place", "inside")
+SET(r_bot, "label_place", "inside")
+SET(r_bot, "value_place", "bottom")
+SET(r_left, "label_place", "left")
+SET(r_left, "value_place", "inside")
+SET(r_right, "label_place", "inside")
+SET(r_right, "value_place", "right")
+SET(r_none, "label_place", "none")
+SET(r_none, "value_place", "inside")
+
+# the dials that are not in the rail keep both words inside the plate, as the
+# recorder's do, and say how many decimals they are worth
+SET(c_knb, "decimals", 2)
+SET(c_vsl, "decimals", 2)
+SET(c_slid, "decimals", 2)
+
+APPEND(RAIL, r_in)
+APPEND(RAIL, r_top)
+APPEND(RAIL, r_bot)
+APPEND(RAIL, r_left)
+APPEND(RAIL, r_right)
+APPEND(RAIL, r_none)
+
+FUNC rail_word(held)
+    VAR said = GET(held, "label")
+    VAR where = GET(held, "label_place")
+    VAR line = said + " label " + where
+    VAR has = GET(held, "value_place")
+    IF has != where THEN
+        VAR line = line + ", value " + has
+    END
+    RETURN line
+END
+
+# -- the page's answers --------------------------------------------------
+
+FUNC c_press_said()
+    VAR line = "BUTTON: " + whole(counted(0)) + " press(es)"
+    RETURN told(c_out1, line)
+END
+
+FUNC c_toggle_said(v)
+    IF v > 0 THEN
+        RETURN told(c_out1, "TOGGLE on - its glyph changed hands")
+    END
+    RETURN told(c_out1, "TOGGLE off")
+END
+
+# an icon has no value of its own, so the click writes the one prop it does have:
+# the glyph the atlas is asked for.
+FUNC c_icon_said()
+    VAR at = AT(CLOCKS, 1) + 1
+    IF at >= LEN(GLYPHS) THEN
+        VAR at = 0
+    END
+    SET_AT(CLOCKS, 1, at)
+    VAR said = AT(GLYPHS, at)
+    SET(c_icon, "glyph", said)
+    RETURN told(c_out1, "ICON now draws " + said)
+END
+
+# the linked pair reports from both ends, so a drag on either one says what the
+# other ended up holding - which is the only way to show a link rather than claim it
+FUNC c_pair_said(v)
+    VAR mine = two(GET(c_slid, "value"))
+    VAR theirs = two(GET(c_knb, "value"))
+    VAR line = "Level " + mine + " - Tone " + theirs
+    VAR line = line + " - Peak " + two(GET(c_meter, "value"))
+    RETURN told(c_out2, line)
+END
+
+FUNC c_gain_said(v)
+    RETURN told(c_out2, "VSLIDER " + two(v) + " - it steps by " + two(GET(c_vsl, "step")))
+END
+
+FUNC c_freq_said(v)
+    RETURN told(c_out2, "NUMBER " + whole(v) + " - decimals " + whole(GET(c_num, "decimals")))
+END
+
+FUNC c_radio_said(v)
+    RETURN told(c_out3, "RADIO " + pick_word(c_radio, v))
+END
+
+FUNC c_drop_said(v)
+    RETURN told(c_out3, "DROPDOWN " + pick_word(c_drop, v))
+END
+
+# one handler for four kinds: the event hands over the value *and* the row it
+# belongs to, so a pad, a keybed, an envelope and a curve need not each guess.
+FUNC c_shape_said(v, prop)
+    VAR who = GET(SENDER(), "label")
+    VAR line = who + " " + prop + " " + two(v)
+    RETURN told(c_out4, line)
+END
+
+FUNC c_bar_said(v)
+    VAR name = pick_word(c_bar, v)
+    RETURN apply_preset(name)
+END
+
+# a preset is the seven numbers the file holds, and the page's own widgets are
+# what they move: nothing is asked of a voice that is not wired here.
+FUNC apply_preset(name)
+    VAR held = PRESET_LOAD(name)
+    IF TYPE_OF(held) != "list" THEN
+        VAR line = "preset " + name + " holds " + TYPE_OF(held)
+        RETURN told(c_out4, line + ", not a row of values")
+    END
+    IF LEN(held) < 7 THEN
+        VAR line = "preset " + name + " holds " + STR(LEN(held))
+        RETURN told(c_out4, line + " values, and seven are needed")
+    END
+    SET(c_slid, "value", AT(held, 0))
+    SET(c_vsl, "value", AT(held, 1))
+    SET(c_knb, "value", AT(held, 2))
+    SET(c_num, "value", AT(held, 3))
+    SET(c_meter, "value", AT(held, 4))
+    SET(c_xy, "x", AT(held, 5))
+    SET(c_xy, "y", AT(held, 6))
+    VAR line = "preset " + name + " - seven widgets moved"
+    RETURN told(c_out4, line)
+END
+
+FUNC c_rail_said(v)
+    RETURN told(c_out5, rail_word(SENDER()))
+END
+
+# the two directions of the link row: break every link one widget is in, and put
+# the same three back. ``UNLINK`` answers how many it took, which is the sentence.
+FUNC c_unlink_said()
+    VAR gone = UNLINK(c_slid)
+    VAR line = STR(gone) + " link(s) broken from Level"
+    IF gone == 0 THEN
+        VAR line = "there was no link left to break"
+    END
+    RETURN told(c_out6, line)
+END
+
+FUNC c_relink_said()
+    LINK_VALUE(c_slid, c_knb, 1)
+    LINK_STATE(c_slid, "value", c_meter, "value", 0)
+    RETURN told(c_out6, "Level mirrors Tone again, and drives Peak")
+END
+
+FUNC c_focus_said()
+    RETURN SET(c_foc, "label", "the field has the keyboard")
+END
+
+FUNC c_blur_said()
+    RETURN SET(c_foc, "label", "the keyboard moved on")
+END
+
+FUNC c_key_said(name)
+    RETURN SET(c_key, "label", "key: " + name)
+END
+
+FUNC c_char_said(text)
+    RETURN SET(c_chr, "label", "char: " + text)
+END
+
+FUNC c_enter_said()
+    RETURN SET(c_hover, "label", "the pointer is on the button - its hover role is lit")
+END
+
+FUNC c_leave_said()
+    RETURN SET(c_hover, "label", "the pointer left - the role went back to normal")
+END
+
+# the three links the page is built with. The pair shares one range on purpose: a
+# mirror asked to hold a number outside its own would be clamped, and a showcase
+# that quietly clamps is a showcase that lies about what it did.
+LINK_VALUE(c_slid, c_knb, 1)
+LINK_STATE(c_slid, "value", c_meter, "value", 0)
+LINK_STATE(c_tog2, "value", c_note, "visible", 0)
+
+ON_CLICK(c_btn, c_press_said)
+ON_CLICK(c_icon, c_icon_said)
+ON_ENTER(c_btn, c_enter_said)
+ON_LEAVE(c_btn, c_leave_said)
+ON_CHANGE(c_tog, c_toggle_said)
+ON_CHANGE(c_slid, c_pair_said)
+ON_CHANGE(c_knb, c_pair_said)
+ON_CHANGE(c_vsl, c_gain_said)
+ON_CHANGE(c_num, c_freq_said)
+ON_CHANGE(c_radio, c_radio_said)
+ON_CHANGE(c_drop, c_drop_said)
+ON_CHANGE(c_xy, c_shape_said)
+ON_CHANGE(c_keys, c_shape_said)
+ON_CHANGE(c_adsr, c_shape_said)
+ON_CHANGE(c_curve, c_shape_said)
+ON_CHANGE(c_bar, c_bar_said)
+ON_CLICK(c_unlink, c_unlink_said)
+ON_CLICK(c_relink, c_relink_said)
+ON_FOCUS(c_num, c_focus_said)
+ON_BLUR(c_num, c_blur_said)
+ON_KEY(c_num, c_key_said)
+ON_CHAR(c_num, c_char_said)
+
+ON_CHANGE(r_in, c_rail_said)
+ON_CHANGE(r_top, c_rail_said)
+ON_CHANGE(r_bot, c_rail_said)
+ON_CHANGE(r_left, c_rail_said)
+ON_CHANGE(r_right, c_rail_said)
+ON_CHANGE(r_none, c_rail_said)
+
+# the scene is left shown for now; the last section of the script gives the window
+# back to the deck, which is what a person who runs the example should land on.
+told(c_cap, "sixteen kinds on this page, and every one of them answers on it")
+
+# -- the layout page ----------------------------------------------------
+#
+# The geometry verbs, shown as what they do. Every readout on this page quotes a
+# number the layout pass *measured* - the width of a widget whose size the pass
+# decided, the sentence a glue reads back, the content and the travel of a viewport -
+# rather than the number the script asked for, which is the rule the deck already
+# follows for ``cell`` and ``order``: an intention is not a fact.
+#
+# So the two kinds of sentence are kept apart on purpose. A band's readout is written
+# every frame from the pass and never by a click; the caption at the bottom of the
+# page is what a click says, and is the only place the asked-for number appears. A
+# readout that a handler wrote and a frame overwrote would be one of the two lying.
+#
+# The page is designed against the room a scene actually gets: 720 px of window with
+# the menu bar's 44 taken off the top leaves 676. The runtime glues a scene's own
+# panel into that room, so this page is glued to the panel and the caption is glued
+# to its bottom edge - a resize moves the last row of words instead of hiding it
+# under the window.
+VAR l_scene = WORKSPACE("layout")
+VAR l_page  = PANEL("")
+
+# band one: a row whose gap the page moves, and a column that is a column. The row's
+# last cell is packed ``fill``, which is what makes a gap a measurable number: the
+# four buttons are 90 px each and the fourth one is whatever the gaps leave.
+VAR l_stacks = PANEL("")
+VAR l_t1     = TEXT("Stacks: a row and a column")
+VAR l_row    = PANEL("")
+VAR l_r1     = BUTTON("one")
+VAR l_r2     = BUTTON("two")
+VAR l_r3     = BUTTON("three")
+VAR l_r4     = BUTTON("four")
+VAR l_rbtn   = PANEL("")
+VAR l_gless  = BUTTON("Less gap")
+VAR l_gmore  = BUTTON("More gap")
+VAR l_abtn   = PANEL("")
+VAR l_align  = BUTTON("Change align")
+VAR l_col    = PANEL("")
+VAR l_c1     = TEXT("three rows of sixteen")
+VAR l_c2     = TEXT("the column's own gap is six")
+VAR l_c3     = TEXT("and nothing here is arranged twice")
+VAR l_out1   = TEXT("")
+
+# band two: a grid that offers nothing to a drop, and a panel's own padding. The
+# padded panel's one child is packed ``fill``, so the padding is the only thing
+# between its width and the child's - which is the number below, not a guess.
+VAR l_grid    = PANEL("")
+VAR l_t2      = TEXT("A grid of cells, and a panel's own padding")
+VAR l_gbox    = PANEL("")
+VAR l_g1      = BUTTON("cell 1")
+VAR l_g2      = BUTTON("cell 2")
+VAR l_g3      = BUTTON("cell 3")
+VAR l_g4      = BUTTON("cell 4")
+VAR l_g5      = BUTTON("cell 5")
+VAR l_g6      = BUTTON("cell 6")
+VAR l_padbox  = PANEL("")
+VAR l_padkid  = BUTTON("padded")
+VAR l_padmore = BUTTON("More pad")
+VAR l_padless = BUTTON("Less pad")
+VAR l_out2    = TEXT("")
+
+# band three: the three pack policies side by side in one box the page can narrow,
+# so a resize is a click rather than a window a test has to drag.
+VAR l_pack    = PANEL("")
+VAR l_t3      = TEXT("Three policies, one resize")
+VAR l_packbox = PANEL("")
+VAR l_pk_fix  = BUTTON("fixed")
+VAR l_pk_grow = BUTTON("grow")
+VAR l_pk_fill = BUTTON("fill")
+VAR l_narrow  = BUTTON("Narrow the box")
+VAR l_widen   = BUTTON("Widen it back")
+VAR l_out3    = TEXT("")
+
+# band four: two glues. One widget has both edges on one axis, which is a stretch
+# and not a contradiction; the other reads its neighbour's edge, so it moves when the
+# neighbour is made wider - and an unglued widget keeps the box the glue last wrote.
+VAR l_anchor = PANEL("")
+VAR l_t4     = TEXT("Two glues: a stretch, and a neighbour")
+VAR l_bar    = PANEL("")
+VAR l_side   = BUTTON("the side")
+VAR l_tag    = TEXT("glued to its left edge")
+VAR l_dbtn   = PANEL("")
+VAR l_wside  = BUTTON("Widen the side")
+VAR l_nside  = BUTTON("Narrow it")
+VAR l_unglue = BUTTON("Break the glues")
+VAR l_reglue = BUTTON("Glue them back")
+VAR l_refuse = BUTTON("Ask SET for place")
+VAR l_out4   = TEXT("")
+
+# band five: the two words the pass answers with, read off the widgets themselves
+VAR l_read   = PANEL("")
+VAR l_place  = TEXT("")
+VAR l_packw  = TEXT("")
+VAR l_note2  = TEXT("")
+
+# the right column: a viewport with more rows than it can show, so the wheel, the
+# thumb and the page keys are the only way to the last one, and the last row is
+# neither drawn nor clickable until the offset has been spent getting to it.
+VAR l_colband = PANEL("")
+VAR l_t6      = TEXT("A viewport, and the row that is not on it")
+VAR l_view    = SCROLL("rows")
+VAR l_sbtn    = PANEL("")
+VAR l_end     = BUTTON("To the end")
+VAR l_top     = BUTTON("To the top")
+VAR l_sread   = TEXT("")
+VAR l_cap     = TEXT("")
+
+# the three numbers the page keeps for itself: the row's gap, which of the four
+# alignments the column is on, and the padded panel's padding. One list, moved with
+# ``SET_AT``, because a button answers from inside a function and ``VAR x = x + 1`` there
+# binds a fresh local in the function's own table rather than moving the global it read.
+# The fourth slot is a scroll asked for before the viewport has been measured yet -
+# see ``vw_end``, which switches the scene and asks for its last row in one breath.
+VAR LST    = [8, 1, 12, 0]
+VAR ALIGNS = ["start", "center", "end", "stretch"]
+VAR LROWS  = []
+VAR ROW_H  = 40
+VAR ROW_N  = 12
+
+# -- the boxes, then the tree -------------------------------------------
+#
+# Five bands down the left, one column down the right, and the caption under them
+# all. Only the two full-width bands and the right column are glued, and that is the
+# lesson rather than a convenience: a glued band follows the window and a placed one
+# keeps the width the script gave it, which is what ``fixed`` means.
+PLACE(l_page, 0, 0, 1180, 676)
+PAD(l_page, 0)
+WORKSPACE_ADD(l_scene, l_page)
+APPEND(PAGES, l_page)
+ANCHOR(l_page, "left", "parent", "left", 0)
+ANCHOR(l_page, "right", "parent", "right", 0)
+ANCHOR(l_page, "top", "parent", "top", 0)
+ANCHOR(l_page, "bottom", "parent", "bottom", 0)
+
+PLACE(l_stacks, 6, 6, 700, 146)
+PLACE(l_grid, 6, 158, 700, 164)
+PLACE(l_pack, 6, 328, 700, 118)
+PLACE(l_anchor, 6, 452, 1168, 128)
+PLACE(l_read, 6, 586, 1168, 58)
+PLACE(l_colband, 712, 6, 462, 440)
+PLACE(l_cap, 6, 654, 1168, LINE_SMALL)
+NODE_ADD(l_page, l_stacks)
+NODE_ADD(l_page, l_grid)
+NODE_ADD(l_page, l_pack)
+NODE_ADD(l_page, l_anchor)
+NODE_ADD(l_page, l_read)
+NODE_ADD(l_page, l_colband)
+NODE_ADD(l_page, l_cap)
+
+# the two full-width bands are glued across the page, so a window resize moves the
+# stretch bar inside them; the three left bands and the caption keep or move their
+# own way, each by one of the three doors the page is about.
+ANCHOR(l_anchor, "left", "parent", "left", 6)
+ANCHOR(l_anchor, "right", "parent", "right", -6)
+ANCHOR(l_read, "left", "parent", "left", 6)
+ANCHOR(l_read, "right", "parent", "right", -6)
+ANCHOR(l_colband, "left", "parent", "left", 712)
+ANCHOR(l_colband, "right", "parent", "right", -6)
+ANCHOR(l_colband, "top", "parent", "top", 6)
+ANCHOR(l_cap, "left", "parent", "left", 6)
+ANCHOR(l_cap, "right", "parent", "right", -6)
+ANCHOR(l_cap, "bottom", "parent", "bottom", -6)
+
+VSTACK(l_colband, 8, ["align", "stretch"])
+PACK(l_view, "fill", "fill")
+# the stack keeps a base for every child but the one it is told to fill, so the title,
+# the row of page keys and the viewport's own readout are placed once here - and only
+# the scroll is packed, which is what leaves it the slack of a band the window resizes.
+PLACE(l_t6, 0, 0, 462, LINE_TITLE)
+PLACE(l_sbtn, 0, 0, 462, 26)
+PLACE(l_sread, 0, 0, 462, LINE_TEXT)
+NODE_ADD(l_colband, l_t6)
+NODE_ADD(l_colband, l_view)
+NODE_ADD(l_colband, l_sbtn)
+NODE_ADD(l_colband, l_sread)
+
+# band one
+PLACE(l_t1, 0, 0, 700, LINE_TITLE)
+PLACE(l_row, 0, 26, 440, 40)
+PLACE(l_rbtn, 450, 26, 240, 26)
+PLACE(l_abtn, 450, 58, 250, 26)
+PLACE(l_col, 0, 70, 210, 60)
+PLACE(l_out1, 224, 94, 474, LINE_TEXT)
+NODE_ADD(l_stacks, l_t1)
+NODE_ADD(l_stacks, l_row)
+NODE_ADD(l_stacks, l_rbtn)
+NODE_ADD(l_stacks, l_abtn)
+NODE_ADD(l_stacks, l_col)
+NODE_ADD(l_stacks, l_out1)
+PLACE(l_r1, 0, 0, 90, 26)
+PLACE(l_r2, 0, 0, 90, 26)
+PLACE(l_r3, 0, 0, 90, 26)
+PLACE(l_r4, 0, 0, 90, 26)
+NODE_ADD(l_row, l_r1)
+NODE_ADD(l_row, l_r2)
+NODE_ADD(l_row, l_r3)
+NODE_ADD(l_row, l_r4)
+PACK(l_r4, "fill", "fixed")
+PLACE(l_gless, 0, 0, 110, 26)
+PLACE(l_gmore, 0, 0, 110, 26)
+NODE_ADD(l_rbtn, l_gless)
+NODE_ADD(l_rbtn, l_gmore)
+PLACE(l_align, 0, 0, 160, 26)
+NODE_ADD(l_abtn, l_align)
+PLACE(l_c1, 0, 0, 210, LINE_SMALL)
+PLACE(l_c2, 0, 0, 210, LINE_SMALL)
+PLACE(l_c3, 0, 0, 210, LINE_SMALL)
+NODE_ADD(l_col, l_c1)
+NODE_ADD(l_col, l_c2)
+NODE_ADD(l_col, l_c3)
+
+# band two
+PLACE(l_t2, 0, 0, 700, LINE_TITLE)
+PLACE(l_gbox, 0, 26, 430, 116)
+PLACE(l_padbox, 450, 26, 250, 88)
+PLACE(l_padmore, 450, 118, 120, 26)
+PLACE(l_padless, 580, 118, 120, 26)
+PLACE(l_out2, 0, 144, 700, LINE_TEXT)
+NODE_ADD(l_grid, l_t2)
+NODE_ADD(l_grid, l_gbox)
+NODE_ADD(l_grid, l_padbox)
+NODE_ADD(l_grid, l_padmore)
+NODE_ADD(l_grid, l_padless)
+NODE_ADD(l_grid, l_out2)
+PLACE(l_padkid, 0, 0, 226, 26)
+NODE_ADD(l_padbox, l_padkid)
+PACK(l_padkid, "fill", "fixed")
+
+# band three
+PLACE(l_t3, 0, 0, 700, LINE_TITLE)
+PLACE(l_packbox, 0, 26, 700, 40)
+PLACE(l_narrow, 0, 70, 150, 26)
+PLACE(l_widen, 158, 70, 150, 26)
+PLACE(l_out3, 0, 98, 700, LINE_TEXT)
+NODE_ADD(l_pack, l_t3)
+NODE_ADD(l_pack, l_packbox)
+NODE_ADD(l_pack, l_narrow)
+NODE_ADD(l_pack, l_widen)
+NODE_ADD(l_pack, l_out3)
+PLACE(l_pk_fix, 0, 0, 120, 26)
+PLACE(l_pk_grow, 0, 0, 120, 26)
+PLACE(l_pk_fill, 0, 0, 120, 26)
+NODE_ADD(l_packbox, l_pk_fix)
+NODE_ADD(l_packbox, l_pk_grow)
+NODE_ADD(l_packbox, l_pk_fill)
+PACK(l_pk_fix, "fixed", "fixed")
+PACK(l_pk_grow, "grow", "fixed")
+PACK(l_pk_fill, "fill", "fixed")
+
+# band four
+PLACE(l_t4, 0, 0, 1168, LINE_TITLE)
+PLACE(l_bar, 0, 26, 940, 26)
+PLACE(l_side, 1010, 26, 150, 26)
+PLACE(l_tag, 782, 58, 220, LINE_TEXT)
+PLACE(l_dbtn, 0, 80, 1168, 26)
+PLACE(l_out4, 0, 100, 1168, LINE_TEXT)
+NODE_ADD(l_anchor, l_t4)
+NODE_ADD(l_anchor, l_bar)
+NODE_ADD(l_anchor, l_side)
+NODE_ADD(l_anchor, l_tag)
+NODE_ADD(l_anchor, l_dbtn)
+NODE_ADD(l_anchor, l_out4)
+PACK(l_t4, "fill", "fixed")
+PACK(l_dbtn, "fill", "fixed")
+PACK(l_out4, "fill", "fixed")
+ANCHOR(l_side, "right", "parent", "right", -8)
+ANCHOR(l_bar, "left", "parent", "left", 0)
+ANCHOR(l_bar, "right", l_side, "left", -8)
+ANCHOR(l_tag, "right", l_side, "left", -8)
+PLACE(l_wside, 0, 0, 160, 26)
+PLACE(l_nside, 0, 0, 140, 26)
+PLACE(l_unglue, 0, 0, 160, 26)
+PLACE(l_reglue, 0, 0, 160, 26)
+PLACE(l_refuse, 0, 0, 190, 26)
+NODE_ADD(l_dbtn, l_wside)
+NODE_ADD(l_dbtn, l_nside)
+NODE_ADD(l_dbtn, l_unglue)
+NODE_ADD(l_dbtn, l_reglue)
+NODE_ADD(l_dbtn, l_refuse)
+
+# band five
+PLACE(l_place, 0, 0, 1168, LINE_TEXT)
+PLACE(l_packw, 0, 20, 1168, LINE_TEXT)
+PLACE(l_note2, 0, 40, 1168, LINE_SMALL)
+NODE_ADD(l_read, l_place)
+NODE_ADD(l_read, l_packw)
+NODE_ADD(l_read, l_note2)
+PACK(l_place, "fill", "fixed")
+PACK(l_packw, "fill", "fixed")
+PACK(l_note2, "fill", "fixed")
+
+# the viewport's own rows are made below, after the function one of them is wired to
+# has been declared - a handler is named, not invented on the spot.
+PLACE(l_end, 0, 0, 110, 26)
+PLACE(l_top, 0, 0, 110, 26)
+NODE_ADD(l_sbtn, l_end)
+NODE_ADD(l_sbtn, l_top)
+
+# -- what the page arranges into ----------------------------------------
+
+PLACE(l_g1, 0, 0, 130, 40)
+PLACE(l_g2, 0, 0, 130, 40)
+PLACE(l_g3, 0, 0, 130, 40)
+PLACE(l_g4, 0, 0, 130, 40)
+PLACE(l_g5, 0, 0, 130, 40)
+PLACE(l_g6, 0, 0, 130, 40)
+NODE_ADD(l_gbox, l_g1)
+NODE_ADD(l_gbox, l_g2)
+NODE_ADD(l_gbox, l_g3)
+NODE_ADD(l_gbox, l_g4)
+NODE_ADD(l_gbox, l_g5)
+NODE_ADD(l_gbox, l_g6)
+PACK(l_g1, "fill", "fill")
+PACK(l_g2, "fill", "fill")
+PACK(l_g3, "fill", "fill")
+PACK(l_g4, "fill", "fill")
+PACK(l_g5, "fill", "fill")
+PACK(l_g6, "fill", "fill")
+
+# the twelve rows of the viewport are made further down, after the function one of them
+# is wired to has been declared: a handler is named, not invented on the spot, and a
+# statement that cannot be answered inside a loop body is a page that never finishes.
+
+# every box on this page is measured from its own content edge, so the bands carry no
+# padding of their own - except the one panel whose padding *is* the demonstration.
+PAD(l_stacks, 0)
+PAD(l_grid, 0)
+PAD(l_pack, 0)
+PAD(l_anchor, 0)
+PAD(l_read, 0)
+PAD(l_colband, 0)
+PAD(l_row, 0)
+PAD(l_col, 0)
+PAD(l_gbox, 0)
+PAD(l_packbox, 0)
+PAD(l_padbox, 12)
+# the four rows of buttons are bands of their own, and a panel's default inset is the
+# skin's padding - 18 px off a 26 px row, which would clip the word inside the button to
+# eight pixels of plate. They are arranged, so they own their children's room instead.
+PAD(l_rbtn, 0)
+PAD(l_abtn, 0)
+PAD(l_dbtn, 0)
+PAD(l_sbtn, 0)
+
+# the row is arranged by the page rather than once here: ``l_gap`` and ``l_align``
+# both re-call it, which is the only way a gap and an alignment are answers a person
+# can move instead of two numbers written in a file.
+HSTACK(l_row, 8, ["align", "center"])
+HSTACK(l_rbtn, 8, ["align", "center"])
+HSTACK(l_abtn, 8, ["align", "center"])
+HSTACK(l_dbtn, 8, ["align", "center"])
+HSTACK(l_sbtn, 8, ["align", "center"])
+HSTACK(l_packbox, 8, ["align", "center"])
+VSTACK(l_col, 6, ["align", "start"])
+# three columns, two rows, and no ``"dockable"`` in the option list: the cells here
+# are somewhere a *child* sits, not somewhere a group can be dropped. The deck's grid
+# is the one that offers its cells, and this is the pair of answers side by side.
+GRID(l_gbox, 3, 8)
+
+SET(l_c1, "role", "caption")
+SET(l_c2, "role", "caption")
+SET(l_c3, "role", "caption")
+SET(l_note2, "role", "caption")
+SET(l_out1, "role", "hint")
+SET(l_out2, "role", "hint")
+SET(l_out3, "role", "hint")
+SET(l_out4, "role", "hint")
+SET(l_sread, "role", "hint")
+SET(l_place, "role", "hint")
+SET(l_packw, "role", "hint")
+SET(l_cap, "role", "caption")
+SET(l_rbtn, "role", "window")
+SET(l_abtn, "role", "window")
+SET(l_dbtn, "role", "window")
+SET(l_sbtn, "role", "window")
+
+SET(l_view, "rows", ROW_H)
+SET(l_view, "notch", ROW_H + 4)
+SET(l_view, "bar", 1)
+SET(l_g1, "tooltip", "one cell of a three-column grid")
+SET(l_refuse, "tooltip", "this row raises on purpose; the caption says so first")
+SET(l_note2, "label", "SET(w,'place') and SET(w,'pack') are refused")
+SET(l_note2, "label", STR(GET(l_note2, "label")) + " - only ANCHOR and PACK write them")
+SET(l_note2, "label", STR(GET(l_note2, "label")) + ", and the button above asks for one")
+SET(l_note2, "label", STR(GET(l_note2, "label")) + " on purpose: the refusal is the answer")
+
+# -- what the page answers with -----------------------------------------
+# #
+# The caption is where a click speaks, because a band's own readout is rewritten from
+# the pass every frame - the two would otherwise disagree for the sixty frames it take
+# a gesture to settle, and only one of them could be called a fact.
+FUNC l_log(line)
+    RETURN say(l_cap, line)
+END
+
+FUNC align_word()
+    RETURN AT(ALIGNS, CLAMP(AT(LST, 1), 0, LEN(ALIGNS) - 1))
+END
+
+FUNC place_said(held)
+    VAR said = STR(GET(held, "place"))
+    IF said == "" THEN
+        RETURN "not glued"
+    END
+    RETURN said
+END
+
+FUNC pack_said(held)
+    VAR said = GET(held, "pack")
+    RETURN STR(AT(said, 0)) + "/" + STR(AT(said, 1))
+END
+
+FUNC arrange_row()
+    HSTACK(l_row, AT(LST, 0), ["align", align_word()])
+    RETURN AT(LST, 0)
+END
+
+FUNC l_measured()
+    # ``vw_end`` shows this page and asks for its last row in the same breath, before
+    # the pass has measured the viewport it just attached - so the ask is parked here
+    # and answered on this frame, the one that has a real ``travel`` to clamp against.
+    IF AT(LST, 3) > 0 AND GET(l_view, "travel") > 0 THEN
+        SET_AT(LST, 3, 0)
+        SET(l_view, "offset", -GET(l_view, "travel"))
+    END
+    VAR a = "gap " + whole(AT(LST, 0)) + " asked, the fill cell "
+    VAR a = a + whole(WIDTH(l_r4)) + " px - align " + align_word()
+    VAR a = a + ": a " + whole(HEIGHT(l_r2)) + " button in a "
+    VAR a = a + whole(HEIGHT(l_row)) + " row"
+    SET(l_out1, "label", a)
+    VAR b = "the grid cells are " + whole(WIDTH(l_g1)) + " x " + whole(HEIGHT(l_g1))
+    VAR b = b + " and " + whole(WIDTH(l_g2)) + " x " + whole(HEIGHT(l_g2))
+    VAR b = b + " - one formula, so they cannot differ"
+    VAR b = b + " | PAD " + whole(AT(LST, 2)) + " leaves the child " + whole(WIDTH(l_padkid))
+    SET(l_out2, "label", b)
+    VAR c = "the box is " + whole(WIDTH(l_packbox)) + " px: fixed "
+    VAR c = c + whole(WIDTH(l_pk_fix)) + " - grow " + whole(WIDTH(l_pk_grow))
+    VAR c = c + " - fill " + whole(WIDTH(l_pk_fill))
+    SET(l_out3, "label", c)
+    VAR d = "the stretched bar is " + whole(WIDTH(l_bar)) + " px, the side button "
+    VAR d = d + whole(WIDTH(l_side)) + " px, and the tag keeps its own "
+    VAR d = d + whole(WIDTH(l_tag)) + " px"
+    SET(l_out4, "label", d)
+    # the view is the room the viewport gives its content, and the module only ever
+    # answers content and travel - so the third number is their difference, which is
+    # the box children are clipped to, and not the widget's own outer height.
+    VAR view = GET(l_view, "content") - GET(l_view, "travel")
+    VAR e = "the view is " + whole(view) + " px, so it shows "
+    VAR e = e + whole(FLOOR(view / ROW_H)) + " of " + STR(ROW_N) + " rows"
+    VAR e = e + " - content " + whole(GET(l_view, "content"))
+    VAR e = e + " - travel " + whole(GET(l_view, "travel"))
+    VAR e = e + " - offset " + whole(GET(l_view, "offset"))
+    SET(l_sread, "label", e)
+    VAR f = "GET(l_bar,'place') reads " + place_said(l_bar)
+    VAR f = f + " | GET(l_tag,'place') reads " + place_said(l_tag)
+    SET(l_place, "label", f)
+    VAR g = "GET(w,'pack'): fixed " + pack_said(l_pk_fix)
+    VAR g = g + " - grow " + pack_said(l_pk_grow) + " - fill " + pack_said(l_pk_fill)
+    SET(l_packw, "label", g)
+    RETURN 0
+END
+
+FUNC l_gap(step)
+    VAR at = CLAMP(AT(LST, 0) + step, 0, 40)
+    SET_AT(LST, 0, at)
+    arrange_row()
+    RETURN l_log("HSTACK(l_row, " + whole(at) + ") - the row is arranged again")
+END
+
+FUNC l_align_said()
+    VAR at = AT(LST, 1) + 1
+    IF at >= LEN(ALIGNS) THEN
+        VAR at = 0
+    END
+    SET_AT(LST, 1, at)
+    arrange_row()
+    RETURN l_log("align asked " + align_word())
+END
+
+FUNC l_pad_said(step)
+    VAR at = CLAMP(AT(LST, 2) + step, 0, 40)
+    SET_AT(LST, 2, at)
+    PAD(l_padbox, at)
+    RETURN l_log("PAD(l_padbox, " + whole(at) + ") - the panel owns its children's room")
+END
+
+FUNC l_place_pack(width)
+    PLACE(l_packbox, 0, 26, width, 40)
+    RETURN l_log("the pack box is placed " + whole(width) + " px wide")
+END
+
+FUNC l_size_side(width)
+    PLACE(l_side, 1010, 26, width, 26)
+    RETURN l_log("the side button is " + whole(width) + " px; the bar's glue is its edge")
+END
+
+FUNC l_unglue_said()
+    VAR gone = UNANCHOR(l_bar) + UNANCHOR(l_tag) + UNANCHOR(l_side)
+    VAR line = whole(gone) + " glues taken away, and the three keep the boxes the"
+    RETURN l_log(line + " glues last wrote - undoing a rule is not placing them")
+END
+
+FUNC l_reglue_said()
+    ANCHOR(l_side, "right", "parent", "right", -8)
+    ANCHOR(l_bar, "left", "parent", "left", 0)
+    ANCHOR(l_bar, "right", l_side, "left", -8)
+    ANCHOR(l_tag, "right", l_side, "left", -8)
+    RETURN l_log("the four glues are back, and each owns the axis it names")
+END
+
+# the refusal this page is allowed to show and not describe. The language has no try
+# and no way to read a handler's error from a script, so the caption is written *first*
+# and the call that raises is the last statement: the sentence a person - and the test -
+# gets is the engine's own, naming the two verbs that do write a glue.
+FUNC l_refuse_said()
+    l_log("asking SET(l_bar, 'place') - the answer is an engine error, not a readout")
+    RETURN SET(l_bar, "place", "left -> nowhere")
+END
+
+FUNC l_row_said()
+    VAR held = SENDER()
+    RETURN l_log("a viewport row answered: " + STR(GET(held, "label")))
+END
+
+FUNC l_end_said()
+    SET(l_view, "offset", -GET(l_view, "travel"))
+    RETURN l_log("the offset is the whole travel, which is the only way to row twelve")
+END
+
+FUNC l_top_said()
+    SET(l_view, "offset", 0)
+    RETURN l_log("offset 0 shows the top of the content again")
+END
+
+FUNC l_scroll_said(dx, dy)
+    VAR line = "the wheel asked " + whole(dy) + " notch(es); the pass holds the"
+    RETURN l_log(line + " offset at " + whole(GET(l_view, "offset")))
+END
+
+# the twelve rows are made here, after the function one of them is wired to, and each is
+# a button so the row that is off the fold refuses a click for the same reason it refuses
+# an eye.
+VAR i = 0
+WHILE i < ROW_N THEN
+    VAR lrow = BUTTON("row " + STR(i + 1))
+    PLACE(lrow, 0, i * ROW_H, 420, 36)
+    NODE_ADD(l_view, lrow)
+    APPEND(LROWS, lrow)
+    ON_CLICK(lrow, l_row_said)
+    VAR i = i + 1
+END
+
+# -- the page's answers --------------------------------------------------
+
+ON_CLICK(l_gless, FUNC() -> l_gap(-4))
+ON_CLICK(l_gmore, FUNC() -> l_gap(4))
+ON_CLICK(l_align, l_align_said)
+ON_CLICK(l_padmore, FUNC() -> l_pad_said(4))
+ON_CLICK(l_padless, FUNC() -> l_pad_said(-4))
+ON_CLICK(l_narrow, FUNC() -> l_place_pack(340))
+ON_CLICK(l_widen, FUNC() -> l_place_pack(700))
+ON_CLICK(l_wside, FUNC() -> l_size_side(300))
+ON_CLICK(l_nside, FUNC() -> l_size_side(150))
+ON_CLICK(l_unglue, l_unglue_said)
+ON_CLICK(l_reglue, l_reglue_said)
+ON_CLICK(l_refuse, l_refuse_said)
+ON_CLICK(l_end, l_end_said)
+ON_CLICK(l_top, l_top_said)
+ON_SCROLL(l_view, l_scroll_said)
+
+ON_FRAME(l_measured)
+
+l_measured()
+l_log("the layout page: gap, align, cells, padding, policies, glues and a viewport")
+
+# -- the canvases page --------------------------------------------------
+#
+# Five kinds draw a picture instead of a handle, and the one thing they all have in
+# common is that the words are not theirs: a ``waveform``, a ``spectrum``, a ``plot``,
+# a ``logview`` and a ``clip`` are each in the :mod:`crude.ui.faces` table, and a kind
+# that is in that table is handed its box by ``base_face`` *instead of* being asked to
+# paint a label. So every canvas here stands under a ``TEXT`` of its own and none of
+# them can clip a word - the brief's standing rule is simply not a question on this
+# page, which is worth knowing as well as where the pictures come from.
+#
+# What each one is *fed* is the lesson. A scope draws the buffer a script pushed and
+# says nothing about where it came from; a spectrum's bins are the script's own
+# arithmetic, because there is no FFT in the language and the hint on the kind says so
+# in those words; a plot reads its span off the list it holds, so two plots of one
+# array differ only by a ``CLAMP``; and a ``logview`` truncates rather than wraps,
+# which is why the rows below are short. The ``clip`` is the only one of the five with
+# a position, and therefore the only one here with a cursor, a window and marks.
+#
+# The two scopes are pumped from the stream itself, once a frame, in both directions.
+# A run with ``--no-audio`` answers an empty trace and a flat zero, and the readout
+# says how many samples it got: a flat line on a machine that opened no device is the
+# honest picture, where a signal built in the script would be the showcase claiming
+# something about the machine it happens to be sitting on.
+VAR cv_scene = WORKSPACE("canvases")
+VAR cv_page  = PANEL("")
+
+# band one: one scope per direction the stream can carry.
+VAR cv_scopes = PANEL("")
+VAR cv_t1     = TEXT("Two scopes: the trace in, the bins out")
+VAR cv_wave   = WAVEFORM("input")
+VAR cv_spec   = SPECTRUM("output")
+VAR cv_w_cap  = TEXT("AUDIO_WAVEFORM(256, 0, 'input'), oldest first")
+VAR cv_s_cap  = TEXT("fold_bins(): the mean |sample| per window, not an FFT")
+VAR cv_out1   = TEXT("")
+
+# band two: one array, graphed twice, so the autoscale is the only difference.
+VAR cv_plots  = PANEL("")
+VAR cv_t2     = TEXT("One table, plotted twice")
+VAR cv_plot   = PLOT("the table")
+VAR cv_clamp  = PLOT("clamped")
+VAR cv_p_cap  = TEXT("RES('wave') read as 'values', every one of them")
+VAR cv_c_cap  = TEXT("the same list CLAMPed, and the span the face found")
+VAR cv_out2   = TEXT("")
+
+# band three: the widget with a position, so the only one with a window and a cursor.
+VAR cv_clipband = PANEL("")
+VAR cv_t3       = TEXT("A clip: a window, two marks and a cursor")
+VAR cv_clip     = CLIP("the take")
+VAR cv_crow     = PANEL("")
+VAR cv_cur      = SLIDER("Cursor", 0, 1023, 0)
+VAR cv_mstart   = BUTTON("Mark the start")
+VAR cv_mend     = BUTTON("Mark the end")
+VAR cv_pair     = BUTTON("Zoom to the pair")
+VAR cv_whole    = BUTTON("Whole take")
+VAR cv_follow   = TOGGLE("Follow", 1)
+VAR cv_out3     = TEXT("")
+
+# band four: the log every page in this file writes into, and its own scroll.
+VAR cv_logs   = PANEL("")
+VAR cv_t4     = TEXT("The log, and the newest rows that fit")
+VAR cv_log    = LOGVIEW("actions")
+VAR cv_lrow   = PANEL("")
+VAR cv_new    = BUTTON("To the newest")
+VAR cv_old    = BUTTON("To the oldest")
+VAR cv_lread  = TEXT("")
+VAR cv_cap    = TEXT("")
+
+# the two numbers the click arithmetic below is written against. Nothing in the
+# language reports where a widget ended up - ``WIDTH`` and ``HEIGHT`` answer a box, not
+# a place - so the clip's mapping is true only for as long as this page keeps the boxes
+# it placed: the page is glued to the window's left edge at zero, the band sits six in
+# from it, and the clip is at zero inside a band with no padding of its own, painting
+# itself with a role that has none either. ``content_box`` is the screen box with the
+# padding *and the plate's own border* off every side, and one pixel of border is what
+# the role leaves, so the drawable plate starts one in from the band's six and stops one
+# short of its far edge. That is also why the clip is *placed* across the band rather
+# than stretched by a glue: a width the layout pass chose would be a width these two
+# numbers are lying about.
+VAR CV_LEFT  = 7
+VAR CV_WIDE  = 1166
+VAR SCOPE_N  = 256
+VAR BIN_PER  = 32
+VAR BIN_N    = SCOPE_N / BIN_PER
+VAR LIMIT    = 0.5
+VAR MARK_A   = 300
+VAR MARK_B   = 720
+
+# -- the page's own boxes ------------------------------------------------
+
+PLACE(cv_page, 0, 0, 1180, 676)
+PAD(cv_page, 0)
+WORKSPACE_ADD(cv_scene, cv_page)
+APPEND(PAGES, cv_page)
+ANCHOR(cv_page, "left", "parent", "left", 0)
+ANCHOR(cv_page, "right", "parent", "right", 0)
+ANCHOR(cv_page, "top", "parent", "top", 0)
+ANCHOR(cv_page, "bottom", "parent", "bottom", 0)
+
+PLACE(cv_scopes, 6, 6, 1168, 166)
+PLACE(cv_plots, 6, 178, 1168, 166)
+PLACE(cv_clipband, 6, 350, 1168, 152)
+PLACE(cv_logs, 6, 508, 1168, 136)
+PLACE(cv_cap, 6, 650, 1168, LINE_SMALL)
+NODE_ADD(cv_page, cv_scopes)
+NODE_ADD(cv_page, cv_plots)
+NODE_ADD(cv_page, cv_clipband)
+NODE_ADD(cv_page, cv_logs)
+NODE_ADD(cv_page, cv_cap)
+ANCHOR(cv_scopes, "left", "parent", "left", 6)
+ANCHOR(cv_scopes, "right", "parent", "right", -6)
+ANCHOR(cv_plots, "left", "parent", "left", 6)
+ANCHOR(cv_plots, "right", "parent", "right", -6)
+ANCHOR(cv_clipband, "left", "parent", "left", 6)
+ANCHOR(cv_clipband, "right", "parent", "right", -6)
+ANCHOR(cv_logs, "left", "parent", "left", 6)
+ANCHOR(cv_logs, "right", "parent", "right", -6)
+ANCHOR(cv_cap, "left", "parent", "left", 6)
+ANCHOR(cv_cap, "right", "parent", "right", -6)
+ANCHOR(cv_cap, "bottom", "parent", "bottom", -6)
+
+# band one. The two plates are the same size on purpose: a trace and a set of bins
+# drawn in different boxes would be two pictures arguing about the same window.
+PLACE(cv_t1, 0, 0, 1168, LINE_TITLE)
+PLACE(cv_wave, 0, 26, 574, 92)
+PLACE(cv_spec, 594, 26, 574, 92)
+PLACE(cv_w_cap, 0, 120, 574, LINE_SMALL)
+PLACE(cv_s_cap, 594, 120, 574, LINE_SMALL)
+PLACE(cv_out1, 0, 140, 1168, LINE_SMALL)
+NODE_ADD(cv_scopes, cv_t1)
+NODE_ADD(cv_scopes, cv_wave)
+NODE_ADD(cv_scopes, cv_spec)
+NODE_ADD(cv_scopes, cv_w_cap)
+NODE_ADD(cv_scopes, cv_s_cap)
+NODE_ADD(cv_scopes, cv_out1)
+
+# band two
+PLACE(cv_t2, 0, 0, 1168, LINE_TITLE)
+PLACE(cv_plot, 0, 26, 574, 92)
+PLACE(cv_clamp, 594, 26, 574, 92)
+PLACE(cv_p_cap, 0, 120, 574, LINE_SMALL)
+PLACE(cv_c_cap, 594, 120, 574, LINE_SMALL)
+PLACE(cv_out2, 0, 140, 1168, LINE_SMALL)
+NODE_ADD(cv_plots, cv_t2)
+NODE_ADD(cv_plots, cv_plot)
+NODE_ADD(cv_plots, cv_clamp)
+NODE_ADD(cv_plots, cv_p_cap)
+NODE_ADD(cv_plots, cv_c_cap)
+NODE_ADD(cv_plots, cv_out2)
+
+# band three. The clip keeps the box it is placed in; the row under it is arranged,
+# so the six of them share the width the band has instead of being placed by hand.
+PLACE(cv_t3, 0, 0, 1168, LINE_TITLE)
+PLACE(cv_clip, 0, 26, CV_WIDE, 72)
+PLACE(cv_crow, 0, 102, 1168, 26)
+PLACE(cv_out3, 0, 130, 1168, LINE_SMALL)
+NODE_ADD(cv_clipband, cv_t3)
+NODE_ADD(cv_clipband, cv_clip)
+NODE_ADD(cv_clipband, cv_crow)
+NODE_ADD(cv_clipband, cv_out3)
+PLACE(cv_cur, 0, 0, 220, 26)
+PLACE(cv_mstart, 0, 0, 130, 26)
+PLACE(cv_mend, 0, 0, 120, 26)
+PLACE(cv_pair, 0, 0, 150, 26)
+PLACE(cv_whole, 0, 0, 110, 26)
+PLACE(cv_follow, 0, 0, 100, 26)
+NODE_ADD(cv_crow, cv_cur)
+NODE_ADD(cv_crow, cv_mstart)
+NODE_ADD(cv_crow, cv_mend)
+NODE_ADD(cv_crow, cv_pair)
+NODE_ADD(cv_crow, cv_whole)
+NODE_ADD(cv_crow, cv_follow)
+
+# band four: the log is the only child the stack is told to fill, so a taller window
+# is a log with more rows in it rather than a plate with more empty room under it. The
+# readout rides in the button row rather than on a line of its own: a stack charges a
+# row for every child it holds, and four rows of text is a plate too short to read.
+PLACE(cv_t4, 0, 0, 1168, LINE_TITLE)
+PLACE(cv_lrow, 0, 0, 1168, 26)
+PLACE(cv_log, 0, 30, 1168, 106)
+NODE_ADD(cv_logs, cv_t4)
+NODE_ADD(cv_logs, cv_lrow)
+NODE_ADD(cv_logs, cv_log)
+PLACE(cv_new, 0, 0, 124, 26)
+PLACE(cv_old, 0, 0, 124, 26)
+PLACE(cv_lread, 0, 0, 500, LINE_SMALL)
+NODE_ADD(cv_lrow, cv_new)
+NODE_ADD(cv_lrow, cv_old)
+NODE_ADD(cv_lrow, cv_lread)
+VSTACK(cv_logs, 4, ["align", "start"])
+PACK(cv_log, "fill", "fill")
+HSTACK(cv_crow, 8, ["align", "center"])
+HSTACK(cv_lrow, 8, ["align", "center"])
+
+# every box here is measured from its own content edge. The five canvases cannot be:
+# ``PAD`` is refused on a kind that holds no children, so the only door a script has to
+# a content box that is barely smaller than its whole box is the role it paints itself
+# with - and ``text`` is the role with no padding and the theme's own ink, which is what
+# a plate drawn by a painter rather than by a label wants. A pixel of border is all that
+# is left off, and ``CV_LEFT`` and ``CV_WIDE`` above count it; without the role the trace
+# would stop eight pixels short of each edge and the click arithmetic would be off.
+PAD(cv_scopes, 0)
+PAD(cv_plots, 0)
+PAD(cv_clipband, 0)
+PAD(cv_logs, 0)
+PAD(cv_crow, 0)
+PAD(cv_lrow, 0)
+SET(cv_crow, "role", "window")
+SET(cv_lrow, "role", "window")
+
+SET(cv_wave, "role", "text")
+SET(cv_spec, "role", "text")
+SET(cv_plot, "role", "text")
+SET(cv_clamp, "role", "text")
+SET(cv_log, "role", "text")
+SET(cv_clip, "role", "text")
+
+SET(cv_t1, "role", "title")
+SET(cv_t2, "role", "title")
+SET(cv_t3, "role", "title")
+SET(cv_t4, "role", "title")
+SET(cv_w_cap, "role", "caption")
+SET(cv_s_cap, "role", "caption")
+SET(cv_p_cap, "role", "caption")
+SET(cv_c_cap, "role", "caption")
+SET(cv_cap, "role", "caption")
+SET(cv_out1, "role", "hint")
+SET(cv_out2, "role", "hint")
+SET(cv_out3, "role", "hint")
+SET(cv_lread, "role", "hint")
+
+# -- the data the five plates are drawn from -----------------------------
+#
+# The array resource is the whole reason this page has anything to plot: the language
+# has no math verbs beyond ``MIN``/``MAX``/``CLAMP``/``FLOOR``/``ROUND``, so a series
+# cannot be computed here - it is declared in the manifest and read as it is. One pass
+# copies it, and the same pass keeps the loudest sample it saw, because a readout that
+# quotes ``0.95`` has to have measured it rather than been told it.
+VAR WAVE    = GET(RES("wave"), "values")
+VAR CLAMPED = []
+VAR PEAK    = 0
+VAR i = 0
+WHILE i < LEN(WAVE) THEN
+    VAR v = AT(WAVE, i)
+    VAR up = MAX(v, 0 - v)
+    IF up > PEAK THEN
+        VAR PEAK = up
+    END
+    APPEND(CLAMPED, CLAMP(v, 0 - LIMIT, LIMIT))
+    VAR i = i + 1
+END
+
+# the bins a ``spectrum`` wants, done here because the kind says the script does it:
+# one bar per window of ``per`` samples, and the window's mean absolute value for its
+# height. There is no ``ABS`` either, so a negative sample is folded with ``MAX``,
+# which is the same arithmetic a peak meter does and why the bars read as loudness
+# rather than as frequency - the honest thing to say under a plate that has no FFT.
+FUNC fold_bins(buf, per)
+    VAR out = []
+    VAR at = 0
+    WHILE at < LEN(buf) THEN
+        VAR sum = 0
+        VAR k = 0
+        WHILE k < per AND at + k < LEN(buf) THEN
+            VAR v = AT(buf, at + k)
+            VAR sum = sum + MAX(v, 0 - v)
+            VAR k = k + 1
+        END
+        APPEND(out, sum / MAX(k, 1))
+        VAR at = at + per
+    END
+    RETURN out
+END
+
+SET(cv_wave, "points", SCOPE_N)
+SET(cv_spec, "bins", BIN_N)
+SET(cv_plot, "data", WAVE)
+SET(cv_clamp, "data", CLAMPED)
+SET(cv_clip, "data", WAVE)
+SET(cv_clip, "start", 0)
+SET(cv_clip, "count", 0)
+SET(cv_clip, "playhead", -1)
+SET(cv_clip, "follow", 1)
+SET(cv_clip, "markers", [MARK_A, MARK_B])
+# one column per two pixels of the plate: a 1024-sample take in a 1168 px box is drawn
+# as 584 min/max bars rather than as a thousand vertices, which is what the prop is for.
+SET(cv_clip, "points", 584)
+SET(cv_clip, "tooltip", "a press parks the cursor, a drag pans, the wheel zooms about it")
+SET(cv_cur, "max", LEN(WAVE) - 1)
+SET(cv_w_cap, "tooltip", "the plate is a window onto the newest samples the device carried")
+
+# the log is this page's, but every page in the file has been writing rows into ACTS
+# since the first click: the widget only exists here, so the list is what holds them.
+VAR ACT_LOG = cv_log
+SET(cv_log, "lines", ACTS)
+
+# -- what the page answers with ------------------------------------------
+
+FUNC cv_said(line)
+    RETURN say(cv_cap, line)
+END
+
+# the take's length, and the window inside it, both read off the clip rather than off
+# the array: a dropped file replaces ``data``, and every number on this page has to
+# still be true after it does. ``count`` 0 means the whole take and the pass resolves
+# that per frame, so it is resolved here the same way and not remembered.
+FUNC cv_frames()
+    RETURN LEN(GET(cv_clip, "data"))
+END
+
+FUNC cv_window()
+    VAR asked = GET(cv_clip, "count")
+    VAR all = cv_frames()
+    IF asked <= 0 OR asked > all THEN
+        RETURN all
+    END
+    RETURN asked
+END
+
+FUNC cv_first()
+    VAR all = cv_frames()
+    VAR at = GET(cv_clip, "start")
+    IF at > all - cv_window() THEN
+        RETURN MAX(0, all - cv_window())
+    END
+    RETURN at
+END
+
+# the frame's work: two reads of the stream, two plates fed from them, and the four
+# readouts that can only be true if they are asked every frame. The plots and the clip
+# are not touched here - a picture of a file that has not changed is not a scope.
+FUNC cv_measured()
+    VAR trace = AUDIO_WAVEFORM(SCOPE_N, 0, "input")
+    VAR tone  = AUDIO_WAVEFORM(SCOPE_N, 0, "output")
+    SET(cv_wave, "data", trace)
+    VAR bins = fold_bins(tone, BIN_PER)
+    SET(cv_spec, "data", bins)
+    VAR a = "in peak " + two(AUDIO_LEVEL(0, "peak", "input"))
+    VAR a = a + " - out peak " + two(AUDIO_LEVEL(0, "peak", "output"))
+    VAR a = a + " - the trace holds " + STR(LEN(trace)) + " of the " + STR(SCOPE_N)
+    VAR a = a + " asked, across a plate " + whole(WIDTH(cv_wave)) + " px wide"
+    VAR a = a + " - " + STR(LEN(bins)) + " bins of " + STR(BIN_PER)
+    SET(cv_out1, "label", a)
+    VAR b = "window " + whole(cv_first()) + " to "
+    VAR b = b + whole(cv_first() + cv_window()) + " of " + whole(cv_frames())
+    VAR b = b + " - mark 1 " + whole(AT(GET(cv_clip, "markers"), 0))
+    VAR b = b + " - mark 2 " + whole(AT(GET(cv_clip, "markers"), 1))
+    VAR b = b + " - cursor " + whole(GET(cv_clip, "playhead"))
+    VAR b = b + " - " + whole(GET(cv_clip, "points")) + " columns asked for"
+    SET(cv_out3, "label", b)
+    VAR c = "scroll " + whole(GET(cv_log, "scroll"))
+    VAR c = c + " - " + STR(LEN(ACTS)) + " rows held, newest at the plate's foot"
+    SET(cv_lread, "label", c)
+    RETURN 0
+END
+
+# the cursor, two ways. The slider is the one a script can be asked to move; the press
+# is the one a hand makes, and is turned back into a sample with the box above - which
+# is what the behaviour's own note invites: a project that wants the jump may have it
+# in ``ON_CLICK``, because a press on empty plate is the pan and not the cursor.
+FUNC cv_cursor_said(v)
+    # the same guard the drag reports through: ``cv_dropped`` resizes this slider from
+    # under its own old value, and the sweep that pulls the value inside the new max
+    # writes it *through* this prop while the drop is still running - a number the
+    # file's length moved, not a hand that moved the cursor.
+    IF AT(CV_BUSY, 0) > 0 THEN
+        RETURN 0
+    END
+    SET(cv_clip, "playhead", v)
+    VAR line = "the slider parked the cursor on " + whole(v)
+    IF GET(cv_clip, "follow") > 0 THEN
+        VAR line = line + " - the pass slides the window along behind it next frame"
+    END
+    RETURN cv_said(line)
+END
+
+FUNC cv_clicked(where, x)
+    VAR span = cv_window()
+    VAR inch = (x - CV_LEFT) / CV_WIDE
+    VAR at = CLAMP(cv_first() + inch * span, 0, MAX(cv_frames() - 1, 0))
+    SET(cv_clip, "playhead", at)
+    SET(cv_cur, "value", at)
+    VAR line = "a press at " + whole(x) + " px parked the cursor on sample "
+    RETURN cv_said(line + whole(at) + " of " + whole(cv_frames()))
+END
+
+# a mark is moved by writing the list back rather than reaching into the one the prop
+# holds: the write is what rings ``ON_CHANGE`` and what a preset would save, and a
+# change the guard below answers is a change this page asked for and has already said.
+VAR CV_BUSY = [0]
+
+FUNC cv_mark(which, name)
+    VAR held = GET(cv_clip, "markers")
+    VAR fresh = [AT(held, 0), AT(held, 1)]
+    VAR at = CLAMP(GET(cv_clip, "playhead"), 0, cv_frames())
+    IF at < 0 THEN
+        VAR at = 0
+    END
+    SET_AT(CV_BUSY, 0, 1)
+    SET_AT(fresh, which, at)
+    SET(cv_clip, "markers", fresh)
+    SET_AT(CV_BUSY, 0, 0)
+    VAR line = name + " now holds the cursor: sample " + whole(at)
+    RETURN cv_said(line + " - the number on the plate is " + STR(which + 1))
+END
+
+FUNC cv_pair_said()
+    VAR held = GET(cv_clip, "markers")
+    VAR low = MIN(AT(held, 0), AT(held, 1))
+    VAR high = MAX(AT(held, 0), AT(held, 1))
+    SET(cv_clip, "start", low)
+    VAR span = MAX(high - low, 1)
+    SET(cv_clip, "count", span)
+    VAR line = "the window is the pair: " + whole(low) + " for "
+    VAR line = line + count("sample", span)
+    RETURN cv_said(line + " - the marks outside it are not drawn")
+END
+
+FUNC cv_all_said()
+    SET(cv_clip, "start", 0)
+    SET(cv_clip, "count", 0)
+    RETURN cv_said("count 0 is not a window: the pass resolves it against what data holds")
+END
+
+FUNC cv_follow_said(v)
+    SET(cv_clip, "follow", v)
+    IF v > 0 THEN
+        RETURN cv_said("follow is on - the layout pass centres the cursor, stopping at either end")
+    END
+    RETURN cv_said("follow is off - a cursor outside the window is drawn as no line at all")
+END
+
+# what a hand did to the plate. The marks are the only part of a clip a gesture can
+# move without being asked, so this is the one handler on the page that reports the
+# engine's own work rather than the script's.
+FUNC cv_dragged(v, name)
+    IF name != "markers" THEN
+        RETURN 0
+    END
+    IF AT(CV_BUSY, 0) > 0 THEN
+        RETURN 0
+    END
+    VAR held = GET(cv_clip, "markers")
+    VAR line = "a hand dragged the marks to " + whole(AT(held, 0))
+    RETURN cv_said(line + " and " + whole(AT(held, 1)) + " - GET reads what the plate shows")
+END
+
+# the file a hand dropped. The caption goes down *before* the read, exactly as the
+# layout page's refusal does: a path that is not a sound is answered by the engine's
+# own error and this row is the last thing the log says about it.
+FUNC cv_dropped(paths)
+    VAR held = AT(paths, 0)
+    cv_said("dropped on the take: " + STR(held))
+    VAR wav = WAV_READ(held)
+    VAR fresh = GET(wav, "mixed")
+    VAR n = LEN(fresh)
+    SET_AT(CV_BUSY, 0, 1)
+    SET(cv_clip, "data", fresh)
+    SET(cv_clip, "start", 0)
+    SET(cv_clip, "count", 0)
+    SET(cv_clip, "playhead", -1)
+    SET(cv_clip, "markers", [FLOOR(n / 3), FLOOR(n * 2 / 3)])
+    SET(cv_cur, "max", MAX(n - 1, 0))
+    SET(cv_cur, "value", 0)
+    SET(cv_clip, "playhead", 0)
+    SET_AT(CV_BUSY, 0, 0)
+    VAR line = STR(GET(wav, "name")) + ": " + count("sample", n) + ", "
+    VAR line = line + count("frame", GET(wav, "frames")) + " at "
+    VAR line = line + whole(GET(wav, "rate")) + " Hz - the mix is mono, the marks are a third apart"
+    RETURN cv_said(line)
+END
+
+FUNC cv_new_said()
+    SET(cv_log, "scroll", 0)
+    RETURN cv_said("scroll 0 sits at the newest row, the way a terminal does")
+END
+
+FUNC cv_old_said()
+    SET(cv_log, "scroll", LEN(ACTS))
+    VAR line = "asked " + STR(LEN(ACTS)) + " rows up; the plate holds it at its own page"
+    RETURN cv_said(line + " - GET reads " + whole(GET(cv_log, "scroll")))
+END
+
+ON_CHANGE(cv_cur, cv_cursor_said)
+ON_CHANGE(cv_follow, cv_follow_said)
+ON_CHANGE(cv_clip, cv_dragged)
+ON_CLICK(cv_clip, cv_clicked)
+ON_DROP(cv_clip, cv_dropped)
+ON_CLICK(cv_mstart, FUNC() -> cv_mark(0, "mark 1"))
+ON_CLICK(cv_mend, FUNC() -> cv_mark(1, "mark 2"))
+ON_CLICK(cv_pair, cv_pair_said)
+ON_CLICK(cv_whole, cv_all_said)
+ON_CLICK(cv_new, cv_new_said)
+ON_CLICK(cv_old, cv_old_said)
+
+ON_FRAME(cv_measured)
+
+SET(cv_out2, "label", "the array's own peak is " + two(PEAK) + ", read off " + STR(LEN(WAVE)) + " values")
+SET(cv_out2, "label", STR(GET(cv_out2, "label")) + " in one pass; the copy beside it is CLAMPed to ")
+SET(cv_out2, "label", STR(GET(cv_out2, "label")) + two(0 - LIMIT) + " .. " + two(LIMIT) + ", and a plot")
+SET(cv_out2, "label", STR(GET(cv_out2, "label")) + " stretches whatever span its own list holds")
+
+cv_measured()
+cv_said("five plates that draw a picture: two scopes, two plots, one clip, and the log")
+
+# -- the custom kind page -------------------------------------------------
+#
+# Everything above this line is built from the catalog: the twenty-four kinds whose
+# shape Python knows. This page is the twenty-fifth, and it is a kind the file
+# writes for itself. ``WIDGET_DEFINE`` gives it a name and a base, ``PROP_DEFINE``
+# gives it rows, ``ON_PAINT`` gives it a face, and ``ON_HIT`` gives it an answer for
+# each half of that face - and because the kind is built on ``panel``, the fourth
+# plate below holds a button the way a panel does rather than the way a picture of
+# one does.
+#
+# The page has one problem no catalog widget has. A painter's ops are kept under the
+# widget's props, its box and the skin's digest, so a value that lives in *script*
+# state is invisible to that key: the hatch across the plates is drawn from
+# ``CU_MODE`` and nothing else, and the only door it has to the screen is
+# ``PAINT_REQUEST``. That is the demonstration, and the counters in its readout are
+# the proof - one face recorded per change the cache could see, and none at all for
+# a flip nobody asked about.
+#
+# What is *not* here is said on the page instead of faked: there is no image file in
+# this project, so the mark on a plate is ``P_GLYPH`` out of the generated atlas and
+# ``P_IMAGE`` is named as the verb that would want one.
+
+# the kind, and its two rows. ``label`` is restated rather than invented: a variant
+# may change the default of a row it inherits and keep everything else about it, so
+# a badge nobody ever told a word still paints one - which is the third band.
+WIDGET_DEFINE("badge", "panel", "", "a lit name tag: a lamp, a word and two regions")
+PROP_DEFINE("badge", "label", "string", "tag", "", "", "", "the word the badge paints")
+PROP_DEFINE("badge", "lit", "bool", 0, "", "", "", "whether the lamp is lit")
+
+VAR cu_scene = WORKSPACE("custom")
+VAR cu_page  = PANEL("")
+
+# the plate, in the numbers its painter and its hit handler both work in. ``(0, 0)``
+# is a badge's own corner for each of them, so the rule at 54 is where the lamp half
+# stops for the click as exactly as it is where the line is drawn for the eye. Four
+# plates of 236 with a 16 gap start at 88 so the band they sit in is filled rather
+# than left with a margin only on one side.
+VAR CU_WIDE   = 236
+VAR CU_TALL   = 64
+VAR CU_LAMP   = 27
+VAR CU_RING   = 13
+VAR CU_DIV    = 54
+VAR CU_TEXT   = 62
+VAR CU_STEP   = 252
+VAR CU_FIRST  = 88
+VAR CU_X2     = 340
+VAR CU_X3     = 592
+VAR CU_X4     = 844
+VAR TAU       = 6.28319
+
+# the state no prop holds, and the two numbers that make the cache's behaviour
+# readable: ``CU_PAINTS`` counts the faces the painter was asked to record, and
+# ``CU_SHOWN`` is the mode the last one of those was drawn from.
+VAR CU_MODE   = [0]
+VAR CU_PAINTS = [0]
+VAR CU_SHOWN  = [0]
+
+# band one: four plates, four shapes of hit answer, and the words under them.
+VAR cu_press  = PANEL("")
+VAR cu_t1     = TEXT("A kind this file wrote, and the halves of its face")
+VAR cu_a      = WIDGET("badge", "Movement")
+VAR cu_b      = WIDGET("badge", "Values")
+VAR cu_c      = WIDGET("badge", "Style")
+VAR cu_d      = WIDGET("badge", "Signals")
+VAR cu_kid    = BUTTON("press")
+VAR cu_n1     = TEXT("")
+VAR cu_n2     = TEXT("")
+VAR cu_n3     = TEXT("")
+VAR cu_out1   = TEXT("")
+
+# band two: the cache, which is the only part of a script kind a person cannot see.
+VAR cu_paint  = PANEL("")
+VAR cu_t2     = TEXT("What the paint cache can see, and what only PAINT_REQUEST can")
+VAR cu_prow   = PANEL("")
+VAR cu_mode   = TOGGLE("Hatch", 0)
+VAR cu_silent = BUTTON("Move the state, not the face")
+VAR cu_ask    = BUTTON("Ask for a new face")
+VAR cu_p1     = TEXT("")
+VAR cu_p2     = TEXT("")
+VAR cu_p3     = TEXT("")
+VAR cu_out2   = TEXT("")
+
+# band three: a restated default beside the plain panel that shares the word.
+VAR cu_defaults = PANEL("")
+VAR cu_t3       = TEXT("The default the declaration restated")
+VAR cu_plain    = PANEL("tag")
+VAR cu_bare     = WIDGET("badge", "bare")
+VAR cu_out3     = TEXT("")
+
+# band four: this page's own catalog, read out of the table it just added to.
+VAR cu_table    = PANEL("")
+VAR cu_t4       = TEXT("The table this page added to")
+VAR cu_r1       = TEXT("")
+VAR cu_r2       = TEXT("")
+VAR cu_r3       = TEXT("")
+VAR cu_r4       = TEXT("")
+VAR cu_r5       = TEXT("")
+VAR cu_out4     = TEXT("")
+VAR cu_cap      = TEXT("")
+
+# the plates the paint verbs are asked of, in the order they are drawn.
+VAR CU_MINE = [cu_a, cu_b, cu_c, cu_d, cu_bare]
+
+# -- the page's own boxes -------------------------------------------------
+
+PLACE(cu_page, 0, 0, 1180, 676)
+PAD(cu_page, 0)
+WORKSPACE_ADD(cu_scene, cu_page)
+APPEND(PAGES, cu_page)
+ANCHOR(cu_page, "left", "parent", "left", 0)
+ANCHOR(cu_page, "right", "parent", "right", 0)
+ANCHOR(cu_page, "top", "parent", "top", 0)
+ANCHOR(cu_page, "bottom", "parent", "bottom", 0)
+
+PLACE(cu_press, 6, 6, 1168, 176)
+PLACE(cu_paint, 6, 190, 1168, 150)
+PLACE(cu_defaults, 6, 348, 1168, 122)
+PLACE(cu_table, 6, 478, 1168, 164)
+PLACE(cu_cap, 6, 650, 1168, LINE_SMALL)
+NODE_ADD(cu_page, cu_press)
+NODE_ADD(cu_page, cu_paint)
+NODE_ADD(cu_page, cu_defaults)
+NODE_ADD(cu_page, cu_table)
+NODE_ADD(cu_page, cu_cap)
+ANCHOR(cu_press, "left", "parent", "left", 6)
+ANCHOR(cu_press, "right", "parent", "right", -6)
+ANCHOR(cu_paint, "left", "parent", "left", 6)
+ANCHOR(cu_paint, "right", "parent", "right", -6)
+ANCHOR(cu_defaults, "left", "parent", "left", 6)
+ANCHOR(cu_defaults, "right", "parent", "right", -6)
+ANCHOR(cu_table, "left", "parent", "left", 6)
+ANCHOR(cu_table, "right", "parent", "right", -6)
+ANCHOR(cu_cap, "left", "parent", "left", 6)
+ANCHOR(cu_cap, "right", "parent", "right", -6)
+ANCHOR(cu_cap, "bottom", "parent", "bottom", -6)
+
+# band one. The plates are placed, not stretched: a badge whose width the layout
+# pass chose would be a plate whose rule the hit handler is guessing at.
+PLACE(cu_t1, 0, 0, 1168, LINE_TITLE)
+PLACE(cu_a, CU_FIRST, 30, CU_WIDE, CU_TALL)
+PLACE(cu_b, CU_X2, 30, CU_WIDE, CU_TALL)
+PLACE(cu_c, CU_X3, 30, CU_WIDE, CU_TALL)
+PLACE(cu_d, CU_X4, 30, CU_WIDE, CU_TALL)
+PLACE(cu_n1, 0, 102, 1168, LINE_TEXT)
+PLACE(cu_n2, 0, 120, 1168, LINE_TEXT)
+PLACE(cu_n3, 0, 138, 1168, LINE_TEXT)
+PLACE(cu_out1, 0, 158, 1168, LINE_SMALL)
+NODE_ADD(cu_press, cu_t1)
+NODE_ADD(cu_press, cu_a)
+NODE_ADD(cu_press, cu_b)
+NODE_ADD(cu_press, cu_c)
+NODE_ADD(cu_press, cu_d)
+NODE_ADD(cu_press, cu_n1)
+NODE_ADD(cu_press, cu_n2)
+NODE_ADD(cu_press, cu_n3)
+NODE_ADD(cu_press, cu_out1)
+PLACE(cu_kid, 150, 20, 76, 26)
+NODE_ADD(cu_d, cu_kid)
+
+# band two
+PLACE(cu_t2, 0, 0, 1168, LINE_TITLE)
+PLACE(cu_prow, 0, 28, 1168, 26)
+PLACE(cu_p1, 0, 62, 1168, LINE_TEXT)
+PLACE(cu_p2, 0, 82, 1168, LINE_TEXT)
+PLACE(cu_p3, 0, 102, 1168, LINE_TEXT)
+PLACE(cu_out2, 0, 126, 1168, LINE_SMALL)
+NODE_ADD(cu_paint, cu_t2)
+NODE_ADD(cu_paint, cu_prow)
+NODE_ADD(cu_paint, cu_p1)
+NODE_ADD(cu_paint, cu_p2)
+NODE_ADD(cu_paint, cu_p3)
+NODE_ADD(cu_paint, cu_out2)
+PLACE(cu_mode, 0, 0, 100, 26)
+PLACE(cu_silent, 0, 0, 260, 26)
+PLACE(cu_ask, 0, 0, 170, 26)
+NODE_ADD(cu_prow, cu_mode)
+NODE_ADD(cu_prow, cu_silent)
+NODE_ADD(cu_prow, cu_ask)
+
+# band three
+PLACE(cu_t3, 0, 0, 1168, LINE_TITLE)
+PLACE(cu_plain, CU_FIRST, 28, CU_WIDE, CU_TALL)
+PLACE(cu_bare, CU_X2, 28, CU_WIDE, CU_TALL)
+PLACE(cu_out3, 0, 98, 1168, LINE_TEXT)
+NODE_ADD(cu_defaults, cu_t3)
+NODE_ADD(cu_defaults, cu_plain)
+NODE_ADD(cu_defaults, cu_bare)
+NODE_ADD(cu_defaults, cu_out3)
+
+# band four
+PLACE(cu_t4, 0, 0, 1168, LINE_TITLE)
+PLACE(cu_r1, 0, 28, 1168, LINE_TEXT)
+PLACE(cu_r2, 0, 46, 1168, LINE_TEXT)
+PLACE(cu_r3, 0, 64, 1168, LINE_TEXT)
+PLACE(cu_r4, 0, 82, 1168, LINE_TEXT)
+PLACE(cu_r5, 0, 100, 1168, LINE_TEXT)
+PLACE(cu_out4, 0, 124, 1168, LINE_SMALL)
+NODE_ADD(cu_table, cu_t4)
+NODE_ADD(cu_table, cu_r1)
+NODE_ADD(cu_table, cu_r2)
+NODE_ADD(cu_table, cu_r3)
+NODE_ADD(cu_table, cu_r4)
+NODE_ADD(cu_table, cu_r5)
+NODE_ADD(cu_table, cu_out4)
+
+# the rows that arrange themselves, and the plates with nothing taken off their
+# edges, both for the same reason as on the canvases page: a badge's child is placed
+# against its content box, so the padding a role brings would move the button out
+# from under the word it is meant to sit beside.
+PAD(cu_press, 0)
+PAD(cu_paint, 0)
+PAD(cu_defaults, 0)
+PAD(cu_table, 0)
+PAD(cu_prow, 0)
+PAD(cu_a, 0)
+PAD(cu_b, 0)
+PAD(cu_c, 0)
+PAD(cu_d, 0)
+PAD(cu_bare, 0)
+SET(cu_prow, "role", "window")
+HSTACK(cu_prow, 8, ["align", "center"])
+
+# the roles the rows are painted in, and so the heights they need: a title is 22.5
+# px of word in a 24 px row, a caption 13.75 in 18, and a readout 11.25 in 16. The
+# badges are not in this list - every primitive in their painter names its own role,
+# which is the one thing a script-drawn face has that a catalog kind does not.
+SET(cu_t1, "role", "title")
+SET(cu_t2, "role", "title")
+SET(cu_t3, "role", "title")
+SET(cu_t4, "role", "title")
+SET(cu_n1, "role", "caption")
+SET(cu_n2, "role", "caption")
+SET(cu_n3, "role", "caption")
+SET(cu_p1, "role", "caption")
+SET(cu_p2, "role", "caption")
+SET(cu_p3, "role", "caption")
+SET(cu_r1, "role", "caption")
+SET(cu_r2, "role", "caption")
+SET(cu_r3, "role", "caption")
+SET(cu_r4, "role", "caption")
+SET(cu_r5, "role", "caption")
+SET(cu_out1, "role", "hint")
+SET(cu_out2, "role", "hint")
+SET(cu_out3, "role", "hint")
+SET(cu_out4, "role", "hint")
+SET(cu_cap, "role", "caption")
+
+SET(cu_a, "label", "Movement")
+SET(cu_a, "lit", 1)
+SET(cu_b, "label", "Values")
+SET(cu_b, "lit", 0)
+SET(cu_c, "label", "Style")
+SET(cu_c, "lit", 1)
+SET(cu_d, "label", "Signals")
+SET(cu_d, "lit", 0)
+
+# -- the face: what every plate above is drawn from ----------------------
+#
+# One painter, five plates. It reads two props - the word and the lamp - and one
+# value no prop holds, the hatch, which is the whole of the difference between a
+# face the cache can see for itself and a face that has to be asked about. The two
+# counters at the end of it are the proof of that difference: they move when this
+# function ran and do not move when a recorded face was replayed instead.
+FUNC cu_face(p, w)
+    VAR wide = WIDTH(w)
+    VAR tall = HEIGHT(w)
+    VAR mid = tall / 2
+    VAR said = "the lamp is dark"
+    P_RECT(p, 0, 0, wide, tall, 6, "surface")
+    P_ARC(p, CU_LAMP, mid, CU_RING, 0, TAU, 2, "outline")
+    IF GET(w, "lit") > 0 THEN
+        P_CIRCLE(p, CU_LAMP, mid, 9, "led")
+        P_GLYPH(p, CU_LAMP - 8, mid - 8, 16, 16, "power", "icon")
+        VAR said = "the lamp is lit"
+    END
+    P_LINE(p, CU_DIV, 6, CU_DIV, tall - 6, 1, "outline")
+    P_TEXT(p, CU_TEXT, 8, GET(w, "label"), 13, "text")
+    P_TEXT(p, CU_TEXT, tall - 22, said, 11, "hint")
+    IF AT(CU_MODE, 0) > 0 THEN
+        P_LINE(p, CU_TEXT, mid, wide - 10, mid, 1, "accent")
+    END
+    SET_AT(CU_PAINTS, 0, AT(CU_PAINTS, 0) + 1)
+    SET_AT(CU_SHOWN, 0, AT(CU_MODE, 0))
+    RETURN 0
+END
+
+# -- what each half of the face is called --------------------------------
+#
+# Three shapes, because a hit handler has three things it may mean. A word is a
+# *name*: the whole plate still takes the click and the word is what ``ON_CLICK`` is
+# handed, which is how one widget has a lamp half and a word half without two widgets
+# in it. A box of four numbers is a *narrowing*, in the same local numbers the
+# painter used. And a box with no area is the one answer that refuses a click, which
+# is why the third plate below can be silent on the half of it that does nothing.
+FUNC cu_region(dx, dy)
+    IF dx < CU_DIV THEN
+        RETURN "lamp"
+    END
+    RETURN "word"
+END
+
+FUNC cu_body(dx, dy)
+    RETURN "body"
+END
+
+FUNC cu_half(dx, dy)
+    IF dx < CU_DIV THEN
+        RETURN [0, 0, CU_DIV, HEIGHT(SENDER())]
+    END
+    RETURN [0, 0, 0, 0]
+END
+
+FUNC cu_two_told(where, x, y)
+    VAR said = "one ON_HIT, two names: the plate answered '" + STR(where) + "'"
+    IF where != "lamp" THEN
+        RETURN say(cu_out1, said + " - the word half is a word, so nothing moved")
+    END
+    SET(cu_a, "lit", 1 - GET(cu_a, "lit"))
+    RETURN say(cu_out1, said + ", and the lamp followed because the script said it should")
+END
+
+FUNC cu_body_told(where, x, y)
+    SET(cu_b, "lit", 1 - GET(cu_b, "lit"))
+    VAR line = "a name narrows what a click means, not where it may land: it answered '"
+    RETURN say(cu_out1, line + STR(where) + "' from either half of the plate")
+END
+
+FUNC cu_half_told(where, x, y)
+    SET(cu_c, "lit", 1 - GET(cu_c, "lit"))
+    VAR line = "the box this handler answered took the press; right of its rule it says "
+    RETURN say(cu_out1, line + "[0, 0, 0, 0] and nothing is written here at all")
+END
+
+FUNC cu_none_told(where, x, y)
+    VAR line = "no ON_HIT on this plate, so a click arrives with no region - it reads '"
+    RETURN say(cu_out1, line + STR(where) + "', which is this language's NULL")
+END
+
+# the child is the proof that the kind is a container: a press on the button is the
+# button's own, and the plate it lives in answers for the lamp it was told to light.
+FUNC cu_kid_told(where, x, y)
+    SET(cu_d, "lit", 1 - GET(cu_d, "lit"))
+    VAR line = "the button inside the badge took its own press - a kind built on panel "
+    RETURN say(cu_out1, line + "holds children the way a panel does")
+END
+
+# -- the cache, and the one verb that reaches past it --------------------
+
+FUNC cu_retire(mine)
+    VAR gone = 0
+    VAR i = 0
+    WHILE i < LEN(mine) THEN
+        IF PAINT_REQUEST(AT(mine, i)) > 0 THEN
+            VAR gone = gone + 1
+        END
+        VAR i = i + 1
+    END
+    RETURN gone
+END
+
+FUNC cu_hatch(v)
+    IF v > 0 THEN
+        SET_AT(CU_MODE, 0, 1)
+    ELSE
+        SET_AT(CU_MODE, 0, 0)
+    END
+    VAR lost = cu_retire(CU_MINE)
+    VAR line = "the toggle writes state no prop holds, so it asked "
+    VAR line = line + count("plate", LEN(CU_MINE)) + " and " + STR(lost)
+    RETURN say(cu_out2, line + " gave up the face they had")
+END
+
+FUNC cu_behind()
+    VAR now = 1 - AT(CU_MODE, 0)
+    SET_AT(CU_MODE, 0, now)
+    VAR line = "the state reads " + whole(now) + " and the last face was drawn from "
+    VAR line = line + whole(AT(CU_SHOWN, 0))
+    RETURN say(cu_out2, line + " - nothing was asked, so nothing was painted")
+END
+
+FUNC cu_asking()
+    VAR lost = cu_retire(CU_MINE)
+    VAR line = count("face", lost) + " dropped, so the next frame runs the painter"
+    RETURN say(cu_out2, line + " from the state it reads now: " + whole(AT(CU_MODE, 0)))
+END
+
+VAR i = 0
+WHILE i < LEN(CU_MINE) THEN
+    ON_PAINT(AT(CU_MINE, i), cu_face)
+    VAR i = i + 1
+END
+ON_HIT(cu_a, cu_region)
+ON_HIT(cu_b, cu_body)
+ON_HIT(cu_c, cu_half)
+ON_CLICK(cu_a, cu_two_told)
+ON_CLICK(cu_b, cu_body_told)
+ON_CLICK(cu_c, cu_half_told)
+ON_CLICK(cu_d, cu_none_told)
+ON_CLICK(cu_kid, cu_kid_told)
+ON_CLICK(cu_silent, cu_behind)
+ON_CLICK(cu_ask, cu_asking)
+ON_CHANGE(cu_mode, cu_hatch)
+
+# -- the rows the page reads out of its own table ------------------------
+
+# the rows this kind has that a plain panel does not: the walk is the answer to
+# "what did this file add", asked of the table rather than remembered by hand.
+FUNC cu_own_rows()
+    VAR base = WIDGET_PROPS("panel")
+    VAR rows = WIDGET_PROPS("badge")
+    VAR mine = []
+    VAR i = 0
+    WHILE i < LEN(rows) THEN
+        VAR name = AT(rows, i)
+        IF holds(base, name) == 0 THEN
+            APPEND(mine, name)
+        END
+        VAR i = i + 1
+    END
+    RETURN mine
+END
+
+FUNC cu_state_words()
+    VAR said = []
+    VAR i = 0
+    WHILE i < LEN(CU_MINE) THEN
+        VAR held = AT(CU_MINE, i)
+        VAR word = STR(GET(held, "label"))
+        IF GET(held, "lit") > 0 THEN
+            VAR word = word + " lit"
+        ELSE
+            VAR word = word + " dark"
+        END
+        APPEND(said, word)
+        VAR i = i + 1
+    END
+    RETURN said
+END
+
+FUNC cu_table_words()
+    VAR kinds = WIDGET_KINDS()
+    VAR rows = WIDGET_PROPS("badge")
+    VAR base = WIDGET_PROPS("panel")
+    VAR mine = cu_own_rows()
+    VAR last = STR(AT(kinds, LEN(kinds) - 1))
+    VAR line = "WIDGET_KINDS() answers " + count("name", LEN(kinds))
+    VAR line = line + " - the last of them is '" + last + "', the kind this file wrote"
+    SET(cu_r1, "label", line)
+    VAR line = "WIDGET_PROPS('badge') answers " + count("row", LEN(rows))
+    VAR line = line + " - the " + whole(LEN(base)) + " a panel brings, plus "
+    SET(cu_r2, "label", line + joined(mine, ", "))
+    VAR line = "WIDGET_HAS(cu_bare, 'lit') reads " + whole(WIDGET_HAS(cu_bare, "lit"))
+    SET(cu_r3, "label", line + " and 'value' reads " + whole(WIDGET_HAS(cu_bare, "value")))
+    VAR line = "what each plate was built holding: " + joined(cu_state_words(), " - ")
+    SET(cu_r4, "label", line)
+    VAR line = "and the badge's base is 'panel', which is why the fourth plate holds "
+    SET(cu_r5, "label", line + "a button and a bare build still says 'tag'")
+    VAR line = "this row was written before a frame ran, when the painter had recorded "
+    VAR line = line + count("face", AT(CU_PAINTS, 0)) + " from mode "
+    RETURN say(cu_out4, line + whole(AT(CU_SHOWN, 0)))
+END
+
+SET(cu_n1, "label", "one ON_HIT answers this plate with two names: left of the rule is 'lamp',")
+SET(cu_n1, "label", STR(GET(cu_n1, "label")) + " right of it is 'word', and both halves take the click")
+SET(cu_n2, "label", "the second plate answers one name for the whole box, so either half of it")
+SET(cu_n2, "label", STR(GET(cu_n2, "label")) + " means exactly the same to the handler that pressed it")
+SET(cu_n3, "label", "the third answers a box: press right of its rule and the click is refused,")
+SET(cu_n3, "label", STR(GET(cu_n3, "label")) + " which is the one answer a plate gives by saying nothing")
+SET(cu_p1, "label", "the hatch across a plate is drawn from CU_MODE - script state, no prop,")
+SET(cu_p1, "label", STR(GET(cu_p1, "label")) + " and so invisible to the key the face is cached under")
+SET(cu_p2, "label", "the toggle asks for a new face; the button beside it only moves the state,")
+SET(cu_p2, "label", STR(GET(cu_p2, "label")) + " so the plates keep the hatch they were recorded with")
+SET(cu_p3, "label", "P_IMAGE wants an image file and this project ships none, so the mark on a")
+SET(cu_p3, "label", STR(GET(cu_p3, "label")) + " lit plate is P_GLYPH, drawn out of the generated atlas")
+SET(cu_out3, "label", "a plain panel told the word 'tag', and a badge nobody ever told - the word it")
+SET(cu_out3, "label", STR(GET(cu_out3, "label")) + " paints is the default PROP_DEFINE restated above")
+SET(cu_cap, "label", "five plates this file drew, from two rows it declared for them - and a button")
+SET(cu_cap, "label", STR(GET(cu_cap, "label")) + " that lives inside one of them, because the base is panel")
+
+cu_table_words()
+VAR line = "the state reads " + whole(AT(CU_MODE, 0))
+VAR line = line + " - no face has been asked for yet, so the count is the painter's own"
+say(cu_out1, "press a half of a plate and it says which half it was told it was")
+say(cu_out2, line)
+
+# -- the help page ------------------------------------------------------
+#
+# The same words the head of this file says, in a widget the window can be asked to
+# show: a ``LOGVIEW`` wall the person scrolls rather than a document they have to
+# leave the window to read. It is a scene like every other scene here, so
+# ``WORKSPACE("help")`` makes it, ``WORKSPACE_ADD`` fills it while it is off screen,
+# and the ``Help`` menu rows at the foot of this file are the only doors it has -
+# which is why the rows are functions rather than a caption nobody can reach.
+#
+# What the wall says is only what has been measured. Every number in it is the one
+# the page it belongs to prints in its own readout, and the section about what is
+# *not* here is the honest half of a showcase: no voice behind the knobs, no serial
+# dialog, no window-wide font, none of them because none of them exists to show.
+VAR hs_scene = WORKSPACE("help")
+VAR hs_page  = PANEL("")
+VAR hs_t1    = TEXT("Every page in this file, in this page's own words")
+VAR hs_log   = LOGVIEW("the showcase, read back")
+VAR hs_row   = PANEL("")
+VAR hs_back  = BUTTON("Close the help page")
+VAR hs_out   = TEXT("")
+VAR hs_cap   = TEXT("")
+
+# the wall, one row per ``APPEND``: the parser reads a list literal as a single line,
+# and a row that has to be read off a plate is a sentence rather than a paragraph
+# anyway. ``HS_FROM`` is the scene ``hs_open`` found on screen, kept as the number
+# ``WORKSPACE_INDEX()`` answered, which is the shape ``WORKSPACE_SHOW`` takes back.
+VAR HS_WORDS = []
+VAR HS_FROM  = [0]
+
+# -- the page's own boxes ------------------------------------------------
+
+PLACE(hs_page, 0, 0, 1180, 676)
+PAD(hs_page, 0)
+WORKSPACE_ADD(hs_scene, hs_page)
+APPEND(PAGES, hs_page)
+ANCHOR(hs_page, "left", "parent", "left", 0)
+ANCHOR(hs_page, "right", "parent", "right", 0)
+ANCHOR(hs_page, "top", "parent", "top", 0)
+ANCHOR(hs_page, "bottom", "parent", "bottom", 0)
+
+PLACE(hs_t1, 6, 6, 1168, LINE_TITLE)
+PLACE(hs_log, 6, 36, 1168, 578)
+PLACE(hs_row, 6, 624, 1168, 26)
+PLACE(hs_cap, 6, 658, 1168, LINE_SMALL)
+NODE_ADD(hs_page, hs_t1)
+NODE_ADD(hs_page, hs_log)
+NODE_ADD(hs_page, hs_row)
+NODE_ADD(hs_page, hs_cap)
+ANCHOR(hs_t1, "left", "parent", "left", 6)
+ANCHOR(hs_t1, "right", "parent", "right", -6)
+# the wall is the only thing on the page that grows with the window: its top is glued
+# to the title's and its foot to the button row's, so a taller window is a wall with
+# more rows in it - which ``_draw_logview`` counts again from the box it is given and
+# is the reason the plate needs no help from a frame handler to keep reading true.
+ANCHOR(hs_log, "left", "parent", "left", 6)
+ANCHOR(hs_log, "right", "parent", "right", -6)
+ANCHOR(hs_log, "top", hs_t1, "bottom", 6)
+ANCHOR(hs_log, "bottom", hs_row, "top", -10)
+ANCHOR(hs_row, "left", "parent", "left", 6)
+ANCHOR(hs_row, "right", "parent", "right", -6)
+ANCHOR(hs_row, "bottom", hs_cap, "top", -8)
+ANCHOR(hs_cap, "left", "parent", "left", 6)
+ANCHOR(hs_cap, "right", "parent", "right", -6)
+ANCHOR(hs_cap, "bottom", "parent", "bottom", -6)
+
+PLACE(hs_back, 0, 0, 170, 26)
+PLACE(hs_out, 0, 0, 980, LINE_TEXT)
+NODE_ADD(hs_row, hs_back)
+NODE_ADD(hs_row, hs_out)
+HSTACK(hs_row, 8, ["align", "center"])
+PAD(hs_row, 0)
+
+SET(hs_t1, "role", "title")
+SET(hs_log, "role", "text")
+SET(hs_out, "role", "hint")
+SET(hs_cap, "role", "caption")
+
+# -- what the page answers with -----------------------------------------
+
+FUNC hs_said(line)
+    RETURN say(hs_out, line)
+END
+
+# the scene list, read out of the window rather than remembered here: the manifest
+# reserves five names and the entry script's own scene makes six, and a page that
+# typed the number would be wrong the day the list grew.
+FUNC hs_words()
+    VAR names = WORKSPACE_NAMES()
+    VAR line = count("scene", LEN(names)) + " in this window: " + joined(names, ", ")
+    RETURN hs_said(line + " - this one is number " + whole(WORKSPACE_INDEX()))
+END
+
+# the top of the wall. ``scroll`` is a count of whole lines up from the newest, so
+# the length of the list is past the oldest page and the face holds it there - the
+# first rows are what the plate shows, exactly as a help page is meant to open.
+FUNC hs_top()
+    SET(hs_log, "scroll", LEN(HS_WORDS))
+    RETURN GET(hs_log, "scroll")
+END
+
+FUNC hs_open()
+    VAR was = WORKSPACE()
+    IF was != "help" THEN
+        SET_AT(HS_FROM, 0, WORKSPACE_INDEX())
+    END
+    WORKSPACE_SHOW("help")
+    hs_top()
+    VAR line = "opened from scene " + whole(AT(HS_FROM, 0)) + " - "
+    VAR line = line + count("line", LEN(HS_WORDS))
+    RETURN hs_said(line + ", and the plate is at the top of them")
+END
+
+FUNC hs_close()
+    VAR back = WORKSPACE_SHOW(AT(HS_FROM, 0))
+    RETURN hs_said("the window is on '" + STR(back) + "' again - carried, not rebuilt")
+END
+
+ON_CLICK(hs_back, hs_close)
+
+# -- the wall itself ----------------------------------------------------
+
+APPEND(HS_WORDS, "THE DECK - THE ROOT SCENE, AND THE GROUP VERBS")
+APPEND(HS_WORDS, "four sections in a grid of three columns: six cells, four filled")
+APPEND(HS_WORDS, "and two somewhere to drop, so a dock row has a free cell to name")
+APPEND(HS_WORDS, "Style is not dockable, which is what gives GROUP_DOCK a real refusal")
+APPEND(HS_WORDS, "every verb says back the cell it took or the order it landed on")
+APPEND(HS_WORDS, "GET(section, 'cell') and GET(section, 'order') are re-read each frame")
+APPEND(HS_WORDS, "a header drags and a chevron folds; GROUP_DOCK is the script's door")
+
+APPEND(HS_WORDS, "EVERY KIND THAT HOLDS A VALUE, AND THE GESTURES THAT MOVE IT")
+APPEND(HS_WORDS, "sixteen of them: TEXT, BUTTON, TOGGLE, ICON, SLIDER, VSLIDER, KNOB,")
+APPEND(HS_WORDS, "NUMBER, METER, RADIO, DROPDOWN, XY_PAD, KEYBED, ADSR, CURVE and the")
+APPEND(HS_WORDS, "PRESET_BAR - and every one writes the caption and its own readout")
+APPEND(HS_WORDS, "LINK_VALUE pairs a slider with a knob and does not loop back on itself")
+APPEND(HS_WORDS, "LINK_STATE drives a widget's visibility from a toggle; UNLINK ends it")
+APPEND(HS_WORDS, "Tab walks the page in the order each kind's own role gives it, so the")
+APPEND(HS_WORDS, "NUMBER answers ON_FOCUS and ON_BLUR and the page reports ON_KEY")
+APPEND(HS_WORDS, "ON_CHAR takes a typed character and ON_ENTER, ON_LEAVE a hover")
+APPEND(HS_WORDS, "one rail of five dials shows every label_place: inside, top, bottom,")
+APPEND(HS_WORDS, "left and right, each in a cell the layout gives the margin for")
+APPEND(HS_WORDS, "the bar lists the two files this project ships; no row calls PRESET_SAVE")
+
+APPEND(HS_WORDS, "THE GEOMETRY VERBS, AS WHAT THEY DO RATHER THAN AS A LIST")
+APPEND(HS_WORDS, "HSTACK and VSTACK place a row and a column, each with its own gap")
+APPEND(HS_WORDS, "and align; GRID lays out cells; PAD insets a panel; PACK gives a")
+APPEND(HS_WORDS, "child fixed, grow or fill, and three of them side by side disagree")
+APPEND(HS_WORDS, "about a resize in exactly those three ways - the readout measures it")
+APPEND(HS_WORDS, "a bar glued left and right is the stretch case; the other glue names")
+APPEND(HS_WORDS, "a neighbour, and UNANCHOR lets one edge go so the bar stops growing")
+APPEND(HS_WORDS, "SET(w, 'place') refuses by name, because only ANCHOR writes a glue")
+APPEND(HS_WORDS, "GET(w, 'place') and GET(w, 'pack') are read back for every widget here")
+APPEND(HS_WORDS, "SCROLL holds twelve rows in a viewport far shorter than they are, so")
+APPEND(HS_WORDS, "the wheel, the thumb and the page keys are the only way to the last")
+
+APPEND(HS_WORDS, "FIVE PLATES THAT DRAW A PICTURE RATHER THAN A HANDLE")
+APPEND(HS_WORDS, "WAVEFORM, SPECTRUM, PLOT, LOGVIEW and CLIP: a kind in the faces table")
+APPEND(HS_WORDS, "is handed its box instead of being asked to paint a label, so none of")
+APPEND(HS_WORDS, "the five can clip a word and each stands under a TEXT of its own")
+APPEND(HS_WORDS, "the two scopes are pumped on ON_FRAME from AUDIO_WAVEFORM and")
+APPEND(HS_WORDS, "AUDIO_LEVEL, both directions - a silent run draws a flat line and the")
+APPEND(HS_WORDS, "readout counts the samples it was actually given, which is the truth")
+APPEND(HS_WORDS, "the bins are fold_bins(), the mean of |sample| per window: there is no")
+APPEND(HS_WORDS, "FFT in the language and the hint on the kind says so in those words")
+APPEND(HS_WORDS, "PLOT graphs RES('wave') and the same list CLAMPed beside it, so the")
+APPEND(HS_WORDS, "only difference between the two plates is the span the face found")
+APPEND(HS_WORDS, "CLIP holds the take with two marks - a loop pair, not the recorder's")
+APPEND(HS_WORDS, "four - a press parks the cursor and the wheel zooms about the pointer")
+APPEND(HS_WORDS, "in the engine itself, with no handler on this page to thank for it")
+APPEND(HS_WORDS, "ON_DROP reads a .wav through WAV_READ and plots its samples; a text")
+APPEND(HS_WORDS, "file is refused, and the refusal is the last row the log has")
+APPEND(HS_WORDS, "LOGVIEW holds one row per action taken on any page, newest at the foot")
+
+APPEND(HS_WORDS, "A KIND THIS FILE WRITES FOR ITSELF")
+APPEND(HS_WORDS, "WIDGET_DEFINE('badge', 'panel') makes it and PROP_DEFINE gives it the")
+APPEND(HS_WORDS, "two rows the page then restates: label, and lit - the default written")
+APPEND(HS_WORDS, "out again, which is why a badge nobody ever told still paints a word")
+APPEND(HS_WORDS, "ON_PAINT draws the face with P_RECT, P_ARC, P_LINE, P_TEXT and")
+APPEND(HS_WORDS, "P_GLYPH; P_IMAGE wants an image file and this project ships none")
+APPEND(HS_WORDS, "ON_HIT answers a name for the half a press landed on, a box, or")
+APPEND(HS_WORDS, "nothing at all - and the status line reports which one it was told")
+APPEND(HS_WORDS, "the hatch is drawn from script state, which the paint cache cannot see,")
+APPEND(HS_WORDS, "so the toggle has to ask PAINT_REQUEST for a new face; the counters on")
+APPEND(HS_WORDS, "the page are the proof - one face per change the key could see, none")
+APPEND(HS_WORDS, "for a flip nobody asked about, which is what the other button shows")
+APPEND(HS_WORDS, "WIDGET_KINDS, WIDGET_PROPS('badge') and WIDGET_HAS print this page's")
+APPEND(HS_WORDS, "own table onto it, which is the same table the coverage test reads")
+
+APPEND(HS_WORDS, "THE MENU BAR - EVERY ROW OF IT IS A DOOR A POINTER CAN FIND")
+APPEND(HS_WORDS, "Go lists the scenes: MENU_WORKSPACES reads the window's own list again")
+APPEND(HS_WORDS, "every time the popup opens, with the current one ticked")
+APPEND(HS_WORDS, "Deck runs the group verbs and opens the deck first, because a section")
+APPEND(HS_WORDS, "nobody can see would be a state change with no picture attached to it")
+APPEND(HS_WORDS, "View re-arranges the deck, scrolls the layout page to its last row,")
+APPEND(HS_WORDS, "and writes one caption's size row - see the section below for why")
+APPEND(HS_WORDS, "Settings holds the audio and the MIDI dialogs and Quit; each device")
+APPEND(HS_WORDS, "list says (no devices) where there is no runtime to answer, and")
+APPEND(HS_WORDS, "applying that says so rather than changing something by accident")
+APPEND(HS_WORDS, "Help opens and closes this page. The serial dialog is not offered:")
+APPEND(HS_WORDS, "it takes a declared link and this project declares none, so the row")
+APPEND(HS_WORDS, "would be a door onto a wall - which is the next section's subject")
+
+APPEND(HS_WORDS, "WHAT IS NOT HERE, AND WHY THAT IS THE ANSWER")
+APPEND(HS_WORDS, "no PATCH, no Pd object, no serial, no MIDI link: every control's answer")
+APPEND(HS_WORDS, "is on the page it sits on - a readout, the widget it is linked to, a")
+APPEND(HS_WORDS, "line in the log, a plate that redraws. A showcase whose knobs went to a")
+APPEND(HS_WORDS, "voice nobody asked for would be decoration. Pd wiring is demonstrated")
+APPEND(HS_WORDS, "by metronome and by fm_synth, which are quieter about it and better")
+APPEND(HS_WORDS, "no window-wide font: STYLE(w, 'size') is one widget's row, no manifest key")
+APPEND(HS_WORDS, "scales the window, and a whole-tree scale would clip every fixed-height")
+APPEND(HS_WORDS, "row in this file - so the View rows grow one caption and say no more")
+APPEND(HS_WORDS, "the sound recorder is its own example; the clip here is a widget with")
+APPEND(HS_WORDS, "a loop pair of marks, not a recording app, and nothing in this file")
+APPEND(HS_WORDS, "calls PRESET_SAVE, so no row writes a file into your tree")
+
+APPEND(HS_WORDS, "THE SCENES THEMSELVES, AND THE BAR THAT SWITCHES BETWEEN THEM")
+APPEND(HS_WORDS, "WORKSPACE(name) makes a scene and shows it; WORKSPACE_ADD fills one")
+APPEND(HS_WORDS, "that is off screen, which is how six pages get built before any of")
+APPEND(HS_WORDS, "them is stood in - and why the coverage test walks PAGES rather than")
+APPEND(HS_WORDS, "the root: a hidden scene is not under the root to be found by a walk")
+APPEND(HS_WORDS, "a carried scene keeps every value the person set; a rebuilt one runs")
+APPEND(HS_WORDS, "its entry function every time it is shown, which is WORKSPACE_KEEP")
+APPEND(HS_WORDS, "the root is index 0 and is never re-declared, and the menu bar")
+APPEND(HS_WORDS, "belongs to the window rather than to any scene, so it survives")
+APPEND(HS_WORDS, "every switch and every scene starts below it")
+
+APPEND(HS_WORDS, "THE TWO RULES EVERY PAGE HERE IS BUILT TO")
+APPEND(HS_WORDS, "no dial is big: the dials are 100 by 88 and both of their words go")
+APPEND(HS_WORDS, "inside the plate, as they do in the recorder, because four of them")
+APPEND(HS_WORDS, "in a column of a page this wide have no room for a label outside")
+APPEND(HS_WORDS, "no word is clipped: every line here was measured against the box it")
+APPEND(HS_WORDS, "lands in before it was written, and the test measures it again against")
+APPEND(HS_WORDS, "the widget's clip, its parent's content box and the window's own rect")
+APPEND(HS_WORDS, "and every kind in the catalog is built on some page, so a twenty-")
+APPEND(HS_WORDS, "sixth one fails this example until somebody shows it")
+
+SET(hs_log, "lines", HS_WORDS)
+hs_words()
+hs_top()
+
+# -- the menu bar -------------------------------------------------------
+#
+# Built last, for two reasons that are each other: a popup is a child of the
+# window's root and so draws above whatever was already in the tree, and
+# :meth:`Workspaces.attach_bar` is what re-glues every scene panel that was built
+# before the bar to the bar's bottom edge - so the five pages made above all move
+# down the height of the strip the moment it exists, and the deck's own top glue is
+# the 44 at the head of this file for the same reason. The bar belongs to the window
+# rather than to a scene, which is what every switch on this page is built on.
+VAR bar       = MENUBAR("bar")
+VAR go_menu   = MENU(bar, "Go")
+VAR deck_menu = MENU(bar, "Deck")
+VAR view_menu = MENU(bar, "View")
+VAR set_menu  = MENU(bar, "Settings")
+VAR help_menu = MENU(bar, "Help")
+
+# the workspace door, with nothing in this file to loop over: the rows are the
+# window's own list, re-read every time the popup opens, so a scene made after the
+# menu was built is in it the next time the title is clicked.
+MENU_WORKSPACES(go_menu)
+
+# every Deck row opens the deck first. A verb that moved a section nobody could see
+# would be a state change with no picture attached to it, and the caption it writes
+# is on the page a person then has to be looking at to read the answer.
+FUNC dk_verb(said, at)
+    WORKSPACE_SHOW("root")
+    IF said == "fold" THEN
+        RETURN verb_fold()
+    END
+    IF said == "up" THEN
+        RETURN verb_up()
+    END
+    IF said == "down" THEN
+        RETURN verb_down()
+    END
+    IF said == "first" THEN
+        RETURN verb_first()
+    END
+    IF said == "dock" THEN
+        RETURN verb_dock(at)
+    END
+    IF said == "undock" THEN
+        RETURN verb_undock()
+    END
+    IF said == "free" THEN
+        RETURN verb_free()
+    END
+    IF said == "read" THEN
+        RETURN verb_read()
+    END
+    IF said == "all" THEN
+        RETURN verb_fold_all(1)
+    END
+    IF said == "none" THEN
+        RETURN verb_fold_all(0)
+    END
+    RETURN say(deck_cap, "'" + said + "' is not a deck verb this file has written")
+END
+
+MENU_ADD(deck_menu, "Fold or open the chosen section", FUNC() -> dk_verb("fold", 0))
+MENU_ADD(deck_menu, "Move it up one", FUNC() -> dk_verb("up", 0))
+MENU_ADD(deck_menu, "Move it down one", FUNC() -> dk_verb("down", 0))
+MENU_ADD(deck_menu, "Send it to the front", FUNC() -> dk_verb("first", 0))
+MENU_ADD(deck_menu, "Dock it into cell 4", FUNC() -> dk_verb("dock", 4))
+MENU_ADD(deck_menu, "Dock it into cell 5", FUNC() -> dk_verb("dock", 5))
+MENU_ADD(deck_menu, "Give up its cell", FUNC() -> dk_verb("undock", 0))
+MENU_ADD(deck_menu, "Dock it into the free cell", FUNC() -> dk_verb("free", 0))
+MENU_ADD(deck_menu, "Re-read the sections", FUNC() -> dk_verb("read", 0))
+MENU_ADD(deck_menu, "Fold every section", FUNC() -> dk_verb("all", 0))
+MENU_ADD(deck_menu, "Open every section", FUNC() -> dk_verb("none", 0))
+
+# the View rows, each of which is a gesture a hand could make on the page it opens.
+# ``vw_arrange`` is ``GROUP_MOVE`` to the last position rather than to the first,
+# which is the row the deck's own buttons do not have, and the viewport row calls the
+# layout page's own function instead of writing the same offset out a second time.
+FUNC vw_arrange()
+    WORKSPACE_SHOW("root")
+    VAR held = chosen()
+    VAR at = GROUP_MOVE(held, LEN(GROUPS(deck)) - 1)
+    refresh_cells()
+    VAR line = word(held) + " moved to the last position, which is " + whole(at)
+    RETURN say(deck_cap, line + " - the grid re-reads the list before it draws")
+END
+
+FUNC vw_end()
+    WORKSPACE_SHOW("layout")
+    # the scroll cannot be asked for here: the viewport is only just attached, and
+    # ``travel`` is a number the layout pass has not written for it yet in this run -
+    # reading it now answers 0, and 0 is not the last row. Parked for ``l_measured``,
+    # which is the frame that does have one.
+    SET_AT(LST, 3, 1)
+    RETURN l_log("the layout page is shown, and its last row is asked for next")
+END
+
+# the two size rows, and the honest limit of what they can do. ``STYLE(w, 'size')``
+# writes one widget's row: children are given the context's skin rather than their
+# parent's scaled one, no manifest key scales the window, and the only whole-tree
+# restyle a script can ask for is the theme the deck's own Style section already
+# shows. A window-wide scale would also clip every fixed-height row in this file,
+# which is the one rule a showcase does not trade for a menu row, so these two rows
+# grow and shrink the deck's caption and say exactly that much in it.
+FUNC vw_bigger()
+    WORKSPACE_SHOW("root")
+    VAR now = STR(STYLE(deck_cap, "size", "lg"))
+    VAR line = "STYLE(deck_cap, 'size', '" + now + "') - one caption's words, not the"
+    RETURN say(deck_cap, line + " window's, because no verb scales the whole tree")
+END
+
+FUNC vw_small()
+    WORKSPACE_SHOW("root")
+    VAR now = STR(STYLE(deck_cap, "size", "md"))
+    VAR line = "STYLE(deck_cap, 'size', '" + now + "') - the size the skin's own table"
+    RETURN say(deck_cap, line + " gives a caption, which is what it started on")
+END
+
+MENU_ADD(view_menu, "Re-arrange the deck", vw_arrange)
+MENU_ADD(view_menu, "Scroll to the last row", vw_end)
+MENU_ADD(view_menu, "Enlarge the font", vw_bigger)
+MENU_ADD(view_menu, "Rein the font in", vw_small)
+
+# the two dialogs the run can answer. Both lists are read when the panel opens, so
+# where there is no runtime each shows one disabled ``(no devices)`` row and Apply
+# says there is nothing to apply it to - asserted by the test rather than assumed by
+# this row. ``MENU_SERIAL_DIALOG`` is not here: it takes a declared link.
+MENU_AUDIO_DIALOG(set_menu, "Audio settings")
+MENU_MIDI_DIALOG(set_menu, "MIDI settings")
+MENU_ADD(set_menu, "Quit", FUNC() -> EXIT(0))
+
+MENU_ADD(help_menu, "What every page is for", hs_open)
+MENU_ADD(help_menu, "Close the help page", hs_close)
+
+# the run opens on the deck, whatever the last ``WORKSPACE()`` above declared.
+WORKSPACE_SHOW("root")
+VAR line = "all_gui: opens on '" + WORKSPACE() + "' with "
+LOG(line + STR(LEN(WORKSPACE_NAMES())) + " scenes and " + STR(LEN(PAGES)) + " pages")
+# the caption is written by ``SET`` and not by ``say``, because this is not an action:
+# echoing it into ``ACTS`` would hang a row on the canvases log, and a log's plate is
+# the narrowest box in the window - which is exactly what a page whose every word is
+# measured for must not be asked to truncate. The sentence carries the same count the
+# wall holds, and the wheel words are the ones the layout page's own row already says.
+VAR line = "the wall above holds " + count("row", LEN(HS_WORDS))
+VAR line = line + " - the wheel, the thumb and the page"
+VAR line = line + " keys move it, and a drag on the plate"
+SET(hs_cap, "label", line + " is the fifth way to walk it")

@@ -330,12 +330,30 @@ class InputRouter:
                          if self.width else 1.0)
             self._log(event, "framebuffer", None)
         elif name == "drop":
-            self._call(self.root, "on_drop", event.get("paths", ()))
-            if self.root is not None:
-                self._log(event, "drop", self.root)
+            self._dropped(event)
         elif name == "close":
             self.close_allowed = not self._refused
             self._log(event, "close", None)
+
+    def _dropped(self, event: InputEvent) -> None:
+        """A dropped file is the widget under the pointer's, and the window's.
+
+        GLFW's drop callback carries paths and no position, so the pointer is
+        wherever the router last left it - the same reading a hover between two
+        moves uses, and the only place an ``ON_DROP(w, fn)`` can be aimed at.
+        The widget answers first and the window is asked as well, because a
+        project that opens a file dropped *anywhere* has no widget to thank for
+        it, and a clip that wants only the drops that land on it must not have
+        to argue with the window about who the file belongs to.
+        """
+        paths = event.get("paths", ())
+        target = self.target_at(self.x, self.y)
+        if target is not None and target is not self.root:
+            self._call(target, "on_drop", paths)
+            self._log(event, "drop", target)
+        self._call(self.root, "on_drop", paths)
+        if self.root is not None:
+            self._log(event, "drop", self.root)
 
     def _moved(self, event: InputEvent) -> None:
         x, y = float(event.get("x", self.x)), float(event.get("y", self.y))
