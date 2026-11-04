@@ -524,6 +524,28 @@ def test_the_run_opens_on_the_shipped_bell(stage):
     assert ("message", "pd", "dsp", (1.0,)) in stage.lib.sent
 
 
+def test_the_run_tells_the_patch_what_the_panel_holds(stage):
+    """The quiet bug that made the shipped synth inaudible, pinned.
+
+    ``ON_CHANGE`` is the only thing that normally carries a value to the patch, and a
+    prop written to the number it already holds is not a change - so three of the
+    bell's seventeen numbers reached the panel and never reached the patch:
+    ``[r pitch]`` stayed empty and ``[mtof 0.]`` ran the carrier at 8.18 Hz, below
+    human hearing, with the Gain knob turning up a rumble. ``apply_preset`` ends with
+    ``sync()``, which sends from the panel rather than from whatever happened to move,
+    and the receivers below are the ones no hand ever touched.
+    """
+    told = {entry[1]: entry[2] for entry in drain(stage) if entry[0] == "float"}
+
+    assert told["pitch"] == 69.0, "the carrier's own frequency, from the panel"
+    assert told["ratio"] == 2.0, "the bell is 2f, not the widget's default 1f"
+    assert told["gain"] == pytest.approx(0.2)
+    # the two that a real change carried anyway, so this file stays honest about
+    # which numbers were actually missing before
+    assert told["cutoff"] == 8000.0
+    assert told["index"] == 5.0
+
+
 # -- the voice and the harmonic -----------------------------------------
 
 def test_a_press_on_the_voice_strip_rewrites_the_table_the_carrier_reads(stage):

@@ -499,6 +499,25 @@ FUNC refresh()
     RETURN 0
 END
 
+# The panel is the patch's only source of truth, but ``ON_CHANGE`` is the only thing
+# that normally carries it - and a prop written to the number it already holds is not
+# a change. So a preset that agrees with a widget's own default tells the patch
+# nothing, and [mtof 0.] sits at 8.18 Hz: the run opened subsonic and the Gain knob
+# had nothing to make loud. This is the step that says it out loud - every receiver
+# gets what the panel holds, whether or not a hand moved.
+FUNC sync()
+    PD_SEND(p, "pitch", GET(pitch, "value"))
+    PD_SEND(p, "gain", GET(gain, "value"))
+    PD_SEND(p, "cutoff", GET(cutoff, "value"))
+    PD_SEND(p, "index", GET(index, "value"))
+    PD_SEND(p, "ratio", GET(harm, "value") + 1)
+    # the table rather than set_voice(): picking a voice is a person's choice and
+    # says so in the log, while a sync is the panel repeating itself in silence
+    PD_ARRAY_WRITE(p, "carwave", GET(RES(wave_word(GET(waves, "value"))), "values"))
+    refresh()
+    RETURN 0
+END
+
 # The receivers are the patch's own names; a float goes to the ones that want a
 # number and a list goes to the two envelope inlets, which want triples.
 ON_CHANGE(pitch, FUNC(v) -> PD_SEND(p, "pitch", v))
@@ -565,6 +584,9 @@ FUNC apply_preset(word)
     SET(madsr, "decay", AT(d, 14))
     SET(madsr, "sustain", AT(d, 15))
     SET(madsr, "release", AT(d, 16))
+    # seventeen writes, and the ones that matched the panel changed nothing, so the
+    # patch is told from the panel rather than from whatever happened to move
+    sync()
     LOG("preset: " + word + " - " + STR(LEN(d)) + " value(s)")
     RETURN word
 END
@@ -668,7 +690,8 @@ MENU_ADD(help_menu, "Using this synth", open_help)
 MENU_ADD(help_menu, "Close help", close_help)
 
 # and the run opens on the front panel with the shipped bell: the voice table
-# written, both envelopes closed, and every receiver holding what the knobs show
+# written, both envelopes closed, and every receiver holding what the knobs show -
+# because apply_preset() ends with sync(), which says so whether or not a knob moved
 apply_preset("bell")
 ON_CLICK(help_close, close_help)
 PD_DSP(1)
