@@ -60,6 +60,7 @@ from ..lang.values import (
 from ..ui import (
     HIT,
     KINDS,
+    MODS,
     PAINT,
     ROOT_WORKSPACE,
     SCRIPT_EVENTS,
@@ -153,7 +154,7 @@ CONSTRUCTORS: dict = {
         # arguments come straight out of the kind's own ``args``, so
         # ``ADSR(label, a, d, s, r)`` and five SETs are the same five numbers
         ("WAVEFORM", "waveform"), ("SPECTRUM", "spectrum"),
-        ("PLOT", "plot"), ("LOGVIEW", "logview"),
+        ("PLOT", "plot"), ("LOGVIEW", "logview"), ("CLIP", "clip"),
         ("ADSR", "adsr"), ("CURVE", "curve"), ("XY_PAD", "xy"),
         ("KEYBED", "keybed"), ("PRESET_BAR", "preset_bar"),
         # the viewport: a panel a script fills with children and the pointer
@@ -1149,6 +1150,35 @@ def off(ctx):
     return Number(gone)
 
 
+@binding("MOD_HELD", ["word"], area=AREA,
+         doc="Is this modifier key down now? shift, control, alt or super.")
+def mod_held(ctx):
+    """``MOD_HELD("shift")``: the keyboard state a handler needs and is not given.
+
+    A press carries its modifiers to the behaviour that moves the value, but a
+    script that decides a thing a frame later - an ``ON_CLICK`` that adds a track to
+    the ones already selected on a shift-click, an ``ON_FRAME`` that paints a
+    different face while control is down - has no argument holding that word. The
+    router's live modifier state is the answer, and this is the only door to it: a
+    project that wrote ``0x0001`` to test for a shift-click would be a script that
+    breaks the day the mask moves.
+
+    An unknown word is refused rather than answered ``0``, because ``0`` is a real
+    answer - *not held* - and a typo must not be allowed to look like one. Having no
+    window at all is not an error either: a headless run still has a router, and a
+    program never given a UI has nothing to ask, so it is answered ``0`` and the
+    script goes on.
+    """
+    said = ctx.as_string("word").strip().lower()
+    mask = MODS.get(said)
+    if mask is None:
+        raise ctx.fail(f"{ctx.name}: '{said}' is not a modifier (it is one of: "
+                       f"{', '.join(sorted(MODS))})")
+    window = getattr(ctx.host, "ui", None)
+    mods = int(getattr(getattr(window, "router", None), "mods", 0) or 0)
+    return Number(1 if mods & mask else 0)
+
+
 # -- paint: the primitives an ON_PAINT draws with -----------------------
 
 # what every primitive returns. A painter is a list of statements rather than an
@@ -1610,7 +1640,7 @@ BINDINGS = (
     "LINK_VALUE", "LINK_STATE", "UNLINK",
     *(f"ON_{event.upper()}" for event in WIDGET_EVENTS),
     *(f"ON_{event.upper()}" for event in SCRIPT_EVENTS),
-    "ON_FRAME", "OFF", "OFF_FRAME",
+    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD",
     "WIDTH", "HEIGHT",
     "P_RECT", "P_CIRCLE", "P_ARC", "P_LINE", "P_POLY", "P_TEXT", "P_GLYPH",
     "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",

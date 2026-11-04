@@ -34,12 +34,13 @@ from crude.ui import (BEHAVIOURS, Handlers, InputRouter, MODS, Skin, Widget,
 
 #: the kinds the table answers a gesture for: the eight faces and controls,
 #: plus the four synth widgets a pointer can actually edit, plus the viewport -
-#: which edits no value of its own and moves its content instead - and the group,
+#: which edits no value of its own and moves its content instead - the group,
 #: which edits no value either and answers a fold on its mark and a pickup on its
-#: header
+#: header, and the clip, which moves no value and edits the window and the marks
+#: it is drawn from
 INTERACTIVE = ("slider", "vslider", "knob", "number", "toggle", "button",
                "radio", "dropdown", "adsr", "curve", "xy", "keybed",
-               "preset_bar", "scroll", "group")
+               "preset_bar", "scroll", "group", "clip")
 
 #: the six it deliberately leaves still: the four that always were, and the two
 #: displays whose every pixel is whatever a script last pushed into ``data``
@@ -764,6 +765,155 @@ def test_a_dropdown_click_has_exactly_one_direction(root):
     for _ in range(3):
         held.on_click(*along(held, 0.5), 0)
     assert held.value == 0.0
+
+
+# -- the clip: gestures that move a window, not a value --------------------
+
+
+def test_a_press_on_a_marker_drags_that_marker_and_no_other(root):
+    """The mark under the finger is the mark that moves, and it is held from there.
+
+    Anchored at the sample the press closed on rather than at each increment: a
+    drag is a movement, and a marker that accumulated deltas would land somewhere
+    else depending on how the router happened to coalesce the hand.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 100,
+                                 "markers": [40, 80]}, name="take",
+                  box=(0, 0, 200, 60))
+    left, top, width, height = held.content_box()
+    press(held, left + width * 0.4, top + height * 0.5)
+    held.on_drag(width * 0.1, 0.0, 0)
+    assert list(held.get("markers")) == [pytest.approx(50.0), pytest.approx(80.0)]
+    assert held.take_changes() == ["markers"], "one row, and only the one list"
+    held.on_release(0.0, 0.0, 0)
+    held.on_drag(width * 0.1, 0.0, 0)
+    assert float(held.get("markers")[0]) == 50.0, "the release ended the gesture"
+
+
+def test_a_dragged_marker_lands_on_a_sample_a_script_can_name(root):
+    """Pixels divide into fractions of samples; a marker is never one of those.
+
+    Seven pixels at two samples per pixel is a sample and a half, and the number
+    the row holds afterwards is the whole sample the face was drawn with - which is
+    what lets a knob wired to the same marker agree with the mark on the plate.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 100,
+                                 "markers": [40]}, name="take",
+                  box=(0, 0, 200, 60))
+    left, top, width, _height = held.content_box()
+    press(held, left + width * 0.4, top)
+    held.on_drag(7.0, 0.0, 0)
+    assert list(held.get("markers")) == [pytest.approx(44.0)]
+    assert float(held.get("markers")[0]) % 1.0 == 0.0, "no float noise in a sample"
+
+
+def test_a_press_on_empty_plate_grabs_the_take_and_not_the_playhead(root):
+    """The hand is holding the sample, so a drag right slides the view left.
+
+    The cursor is not moved by a press: a recorder parks it with a knob and the
+    ``follow`` row brings the view along behind it, and a plate that jumped the
+    cursor on every click would leave no way to pan without dragging a mark out of
+    place. A project that wants the jump says so with ``ON_CLICK``, which runs after.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "start": 0, "count": 50},
+                  name="take", box=(0, 0, 200, 60))
+    left, top, width, height = held.content_box()
+    press(held, left + width * 0.5, top + height * 0.5)
+    held.on_drag(width * 0.5, 0.0, 0)
+    assert (held.get("start"), held.get("count")) == (0.0, 50.0), \
+        "already at the head of the take, and an unchanged write is silent"
+    assert held.take_changes() == []
+    held.on_drag(-width, 0.0, 0)
+    assert held.get("start") == 25.0, "the total pull is -25 samples"
+    assert held.get("playhead") == -1.0, "the cursor is the script's to place"
+
+
+def test_a_window_that_is_the_whole_take_has_nothing_to_slide(root):
+    """``count`` 0 means everything, including what has not been recorded yet.
+
+    Writing the length the take happens to have today would freeze a recording that
+    is still growing, so a pan refuses to be the door that closes it - the same 0 a
+    zoom out lands on, and the same 0 a script wrote.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200}, name="take",
+                  box=(0, 0, 200, 60))
+    left, top, width, height = held.content_box()
+    press(held, left + width * 0.25, top + height * 0.5)
+    held.on_drag(-width * 0.25, 0.0, 0)
+    held.on_drag(-width * 0.25, 0.0, 0)
+    assert (held.get("start"), held.get("count")) == (0.0, 0.0)
+    held.set("data", [0.0] * 400)
+    assert held.get("count") == 0.0, "and the take it shows doubled underneath it"
+
+
+def test_the_wheel_zooms_about_where_the_pointer_is(root):
+    """The sample under the cursor stays under the cursor, which is the whole use.
+
+    A window that scaled about its own left edge would slide the take out from
+    under the wheel every notch, and the person would be chasing the peak they were
+    reaching for. The pointer's pixel is remembered from the moves that ran before
+    the scroll, because the wheel itself is a movement and carries no position.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 100}, name="take",
+                  box=(0, 0, 200, 60))
+    left, top, width, height = held.content_box()
+    aimed = left + width * 0.5
+    held.on_move(aimed, top + height * 0.5)
+    held.on_scroll(0.0, 16.0, 0)  # one notch in: the window halves about the pointer
+    assert (held.get("start"), held.get("count")) == (25.0, 50.0)
+    held.on_scroll(0.0, -16.0, 0)
+    assert (held.get("start"), held.get("count")) == (0.0, 100.0), \
+        "and the same notch back is the same window it was"
+    held.on_scroll(0.0, -32.0, 0)
+    assert held.get("count") == 0.0, "out past the take is the take, written as 0"
+
+
+def test_a_wheel_the_pointer_never_told_about_still_has_an_answer(root):
+    """No recorded position is not a missing number: it aims at the middle.
+
+    A wheel pushed by a script, or a plate that moved under a cursor that never
+    crossed it, is a zoom the toolkit still has to draw somewhere, and the one
+    sample a person who has not moved the pointer can be said to be looking at is
+    the centre of the box. Stated here because the alternative is a silent fallback.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 100}, name="take",
+                  box=(0, 0, 200, 60))
+    held.on_scroll(0.0, 16.0, 0)
+    assert (held.get("start"), held.get("count")) == (25.0, 50.0), \
+        "the same window the pointer at the middle would have produced"
+
+
+def test_the_zoom_has_a_floor_and_it_is_one_sample(root):
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 50}, name="take",
+                  box=(0, 0, 200, 60))
+    left, top, width, height = held.content_box()
+    held.on_move(left, top + height * 0.5)  # the pointer sits on sample 0
+    for _ in range(8):
+        held.on_scroll(0.0, 16.0, 0)
+    assert held.get("count") == 1.0, "a window narrower than a sample is not a view"
+    assert held.get("start") == 0.0, "and it closed on the sample it was aimed at"
+
+
+def test_a_clip_gesture_writes_no_value_because_a_clip_holds_none(root):
+    """A press, a drag and a wheel, and the one row a clip has no business touching.
+
+    Every gesture on this kind lands on ``start``, ``count`` or ``markers``. The
+    ``value`` row the catalog hands most kinds is not one of them, and a behaviour
+    that wrote it would be a canvas with two opinions about where it is.
+    """
+    held = placed(root, "clip", {"data": [0.0] * 200, "count": 100,
+                                 "markers": [30]}, name="take",
+                  box=(0, 0, 200, 60))
+    assert held.has_value is False
+    left, top, width, height = held.content_box()
+    press(held, left + width * 0.3, top + height * 0.5)
+    held.on_drag(width * 0.2, 0.0, 0)
+    held.on_release(left + width * 0.5, top + height * 0.5, 0)
+    held.on_scroll(0.0, 16.0, 0)
+    press(held, left + width * 0.3, top + height * 0.5, button=2)
+    held.on_drag(width * 0.2, 0.0, 0)
+    assert held.kind.has("value") is False, "the row is not even in the table"
+    assert set(held.take_changes()) <= {"start", "count", "markers"}
 
 
 # -- what must refuse --------------------------------------------------------

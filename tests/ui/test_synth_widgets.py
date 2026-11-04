@@ -42,7 +42,7 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
                       pd_arguments, pd_object_for, reset, root_panel)
 
 #: the kinds that own a face: every one of them draws a picture inside the plate,
-#  from the eight synth displays and canvases to the ranges, the meter, the radio's
+#  from the nine synth displays and canvases to the ranges, the meter, the radio's
 #  cells and the dial - while ``vslider`` and ``preset_bar`` are proved below to
 #  reach a face through the chain instead of by owning one. ``scroll`` is the odd
 #  one out among the controls: its plate is the panel it is built on and the only
@@ -52,9 +52,9 @@ from crude.ui import (BEHAVIOURS, FACES, RecordingRenderer, Skin, UIContext,
 #  looking for one - so an ordinary panel is still painted by the plate alone.
 #  ``group`` draws no plate at all: the header band, its word and its mark are the
 #  whole picture, and the body under them is the panel it is built on.
-DISPLAY = ("waveform", "spectrum", "plot", "logview", "adsr", "curve", "xy",
-           "keybed", "slider", "meter", "radio", "knob", "scroll", "group",
-           "panel")
+DISPLAY = ("waveform", "spectrum", "plot", "logview", "clip", "adsr", "curve",
+           "xy", "keybed", "slider", "meter", "radio", "knob", "scroll",
+           "group", "panel")
 
 #: the kinds a bare plate and a word still describe: nothing here draws inside
 #  the plate, because a toggle is the plate
@@ -145,9 +145,9 @@ def test_a_variant_wears_its_parents_face_the_way_it_inherits_its_props():
     assert face_for("preset_bar") is FACES["radio"]
 
 
-@pytest.mark.parametrize("kind", DISPLAY[:6])
+@pytest.mark.parametrize("kind", DISPLAY[:7])
 def test_a_synth_display_kind_twins_to_no_pd_box_and_owns_no_emit_row(kind):
-    """The six synth faces twin to no Pd box: ``pd_object`` is empty.
+    """The seven synth faces twin to no Pd box: ``pd_object`` is empty.
 
     ``PD_EMIT`` maps a widget to a real Pd control through ``pd_object``, and a
     scope, an analyser, an envelope, a curve and a pad have no vanilla
@@ -161,7 +161,8 @@ def test_a_synth_display_kind_twins_to_no_pd_box_and_owns_no_emit_row(kind):
     assert pd_object_for(held, {}) == "", kind
     synth_rows = {"data", "points", "bins", "attack", "decay", "sustain",
                   "release", "tension", "x", "y", "low", "octaves",
-                  "channel", "velocity"}
+                  "channel", "velocity", "start", "count", "markers",
+                  "playhead", "follow"}
     # the synth rows are the widget's own bookkeeping; none of them is a Pd
     # inlet/outlet name, and PD_EMIT only fires on rows that carry one
     assert not any(row.pd_name for row in held.props.values()
@@ -697,6 +698,164 @@ def test_the_logviews_arrow_keys_move_one_line_and_its_pages_move_ten(root, skin
     assert float(held.get("scroll")) == 39.0, "the end is a clamp, not an error"
     held.on_key("home")
     assert float(held.get("scroll")) == 0.0
+
+
+# -- the clip: a window onto a take, drawn as bars and marks -------------
+
+
+def test_a_clip_with_nothing_recorded_is_the_flat_line_of_silence(root, skin):
+    """A plate built before its take arrived still says where zero is.
+
+    Two guides are the plate's furniture, drawn whatever the data says - the floor
+    and the centre line - and the third line is the trace itself: the one flat line
+    a scope with an empty buffer draws, in the ink the sound would be drawn in, so a
+    clip is never a blank box and never a box that pretends to be showing something.
+    """
+    held = placed(root, skin, "clip", name="take")
+    found = look(held, skin)
+    left, top, width, height = held.content_box()
+    drawn = paint(held, skin)
+    guide = skin.resolve("grid", "hover").ink
+    lines = drawn.ops_named("line")
+    assert len(lines) == 3, "a floor, a centre line, and the silence on it"
+    assert (lines[0].get("y1"), lines[0].get("y2")) == (top + height,) * 2
+    assert lines[0].get("color") == guide, "the plate's own floor"
+    assert (lines[1].get("y1"), lines[1].get("y2")) == (top + height * 0.5,) * 2
+    said = lines[-1]
+    assert (said.get("x1"), said.get("x2")) == (left, left + width)
+    assert said.get("y1") == said.get("y2") == top + height * 0.5
+    assert said.get("color") == found.ink, "silence is drawn in the sound's ink"
+    assert drawn.count("text") == 0, "no marks, so no numbers over the plate"
+
+
+def test_a_clip_folds_the_window_into_one_min_max_bar_per_column(root, skin):
+    """Four columns, four bars: the plate is a file, not a rolling scope.
+
+    Each column is drawn from its own samples' lowest and highest value, so a
+    stretch that only ever touches +1 is a mark at the ceiling and a stretch that
+    swings between +0.5 and -0.5 is a bar half the plate tall centred on the line -
+    the peaks are what a person is aiming at when they reach for a marker.
+    """
+    held = placed(root, skin, "clip",
+                  {"data": [1, 1, -1, -1, 0, 0, 0.5, -0.5], "points": 4})
+    found = look(held, skin)
+    left, top, width, height = held.content_box()
+    bars = [op for op in paint(held, skin).ops_named("rect")
+            if op.get("color") == found.ink and op.get("width") < width]
+    assert len(bars) == 4, "one per column, and columns are what ``points`` says"
+    middle = top + height * 0.5
+    for slot, bar in enumerate(bars):
+        assert bar.get("x") + bar.get("width") * 0.5 == pytest.approx(
+            left + (slot + 0.5) * width / 4.0), "centred in its column"
+    assert bars[0].get("y") == pytest.approx(top), "+1 is the ceiling"
+    assert bars[1].get("y") == pytest.approx(top + height), "-1 is the floor"
+    assert bars[2].get("y") == pytest.approx(middle), "0 is the line itself"
+    assert bars[3].get("y") == pytest.approx(middle - height * 0.25)
+    assert bars[3].get("height") == pytest.approx(height * 0.5), "+/-0.5"
+
+
+def test_the_window_decides_which_samples_the_bars_are_folded_from(root, skin):
+    """``start`` and ``count`` are the view: the same take, a different four."""
+    take = [-1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0]
+    held = placed(root, skin, "clip", {"data": take, "start": 2, "count": 4,
+                                       "points": 2})
+    found = look(held, skin)
+    left, top, width, height = held.content_box()
+    bars = [op for op in paint(held, skin).ops_named("rect")
+            if op.get("color") == found.ink and op.get("width") < width]
+    assert len(bars) == 2
+    assert bars[0].get("y") == pytest.approx(top), "sample 2, the first +1"
+    assert bars[1].get("y") == pytest.approx(top + height), "sample 3..4"
+    # with no budget the box is the ruler: one column per pixel of the plate
+    wide = placed(root, skin, "clip", {"data": take}, name="whole")
+    across = wide.content_box()[2]
+    folded = [op for op in paint(wide, skin).ops_named("rect")
+              if op.get("color") == look(wide, skin).ink
+              and op.get("width") < across]
+    assert len(folded) == int(across), "a take longer than the box is one bar/pp"
+
+
+def test_the_markers_are_numbered_in_the_order_the_script_wrote_them(root, skin):
+    """Four marks a plate can show: the numbers are how they are tellable apart.
+
+    The list is the script's - rough start, fine start, rough end, fine end - and
+    the word over each line is its place in that list, so a knob wired to
+    ``markers[0]`` and the mark labelled ``1`` are the same thing by inspection.
+    """
+    held = placed(root, skin, "clip", {"data": [0.0] * 100,
+                                       "markers": [10, 30, 60, 90]})
+    left, top, width, height = held.content_box()
+    drawn = paint(held, skin)
+    accent = skin.resolve("accent").fill
+    marks = [op for op in drawn.ops_named("line") if op.get("color") == accent]
+    assert len(marks) == 4
+    for slot, at in enumerate((10, 30, 60, 90)):
+        assert marks[slot].get("x1") == pytest.approx(left + at / 100.0 * width)
+        assert (marks[slot].get("y1"), marks[slot].get("y2")) == (top,
+                                                                  top + height)
+    assert drawn.texts() == ["1", "2", "3", "4"]
+
+
+def test_a_marker_the_window_has_scrolled_past_is_not_pinned_to_the_frame(
+        root, skin):
+    """A mark off the strip is absent, and the ones still shown keep their numbers.
+
+    Clamping a marker to the nearest edge would have the frame claiming its first
+    pixel is where the take starts; and numbering the visible marks from one would
+    rename the same marker when the view moved, which no knob can be wired to.
+    """
+    held = placed(root, skin, "clip", {"data": [0.0] * 100, "markers": [10, 40, 80],
+                                       "start": 60, "count": 40})
+    left, _top, width, _height = held.content_box()
+    drawn = paint(held, skin)
+    marks = [op for op in drawn.ops_named("line")
+             if op.get("color") == skin.resolve("accent").fill]
+    assert len(marks) == 1, "only the mark inside the window is on the plate"
+    assert marks[0].get("x1") == pytest.approx(left + width * 0.5), \
+        "sample 80 of the 60..100 the window is showing"
+    assert drawn.texts() == ["3"], "the third marker, not the first one shown"
+
+
+def test_the_playhead_is_a_line_only_where_the_window_shows_it(root, skin):
+    """-1 is no cursor at all, and a cursor off the view is not dragged on to it."""
+    take = [0.0] * 100
+    thumb = skin.resolve("thumb").fill
+    held = placed(root, skin, "clip", {"data": take, "count": 50, "playhead": 25})
+    left, top, width, height = held.content_box()
+
+    def cursor():
+        return [op for op in paint(held, skin).ops_named("line")
+                if op.get("color") == thumb]
+
+    assert len(cursor()) == 1
+    said = cursor()[0]
+    assert said.get("x1") == pytest.approx(left + width * 0.5), "25 of 0..50"
+    assert (said.get("y1"), said.get("y2")) == (top, top + height)
+    held.set("playhead", -1.0)
+    assert cursor() == [], "-1 means none, the way a -1 elsewhere means no limit"
+    held.set("playhead", 75.0)
+    assert cursor() == [], "sample 75 is past the window the clip is showing"
+
+
+def test_a_plate_too_short_for_a_line_of_text_keeps_the_numbers_back(root, skin):
+    """The marks are still drawn; the words that would not fit are not.
+
+    This is the rule the recorder's knobs have to keep as well: a caption or a
+    readout that does not fit its box is not squeezed in and is not left to overlap
+    the picture - the drawing gives up the decoration and keeps the information.
+    """
+    held = placed(root, skin, "clip", {"data": [0.0] * 100, "markers": [10, 30]},
+                  box=(0, 0, 100, 12))
+    left, top, width, height = held.content_box()
+    assert 0.0 < height < look(held, skin).font * 1.25, "a plate under one line"
+    drawn = paint(held, skin)
+    marks = [op for op in drawn.ops_named("line")
+             if op.get("color") == skin.resolve("accent").fill]
+    assert len(marks) == 2, "the marks are the information"
+    assert drawn.texts() == [], "and the numbers were held back"
+    # a face replaces the plate's word, so a clip's label never costs room
+    said = placed(root, skin, "clip", {"label": "take", "data": [0.0] * 100})
+    assert paint(said, skin).texts() == [], "a clip draws no caption"
 
 
 # -- gestures: what pressing and dragging each picture means --------------

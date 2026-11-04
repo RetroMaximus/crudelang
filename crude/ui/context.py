@@ -47,6 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import RGBA, Renderer, UIError
 from .behaviour import behaviour_for
+from .clip import follow_all
 from .geometry import scale_of
 from .grid import reconcile as reconcile_grids
 from .handlers import Handlers
@@ -253,6 +254,13 @@ class UIContext:
         the frame writes it on the panels that have the row, and a grid outlines
         its cells for exactly as long as the gesture lasts.
 
+        A clip's ``follow`` is a third fact of the same kind: keeping a playhead in
+        view means moving ``start``, and a drawing pass that moved a prop would be a
+        frame that repaints itself forever, so the layout asks
+        :func:`~crude.ui.clip.follow_all` once the boxes are settled - the answer
+        depends on the width the plate ended up with, exactly as a thumb's does. A
+        tree with no clips in it costs one walk and no arithmetic.
+
         A new client rect is answered here as well as by the queued resize event:
         when the root's box and the window's rect disagree, the root is told before
         the pass runs, so whatever a *layer* above the tree places by hand - a
@@ -267,6 +275,7 @@ class UIContext:
                         height=self.height, dpr=self.grid)
         restack(self.root)
         reconcile_grids(self.root, dragging=self.dragging is not None)
+        follow_all(self.root)
         self.moved = moved
         # the tree may have moved under a pointer that did not
         self.router.rehover()

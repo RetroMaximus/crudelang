@@ -829,10 +829,45 @@ _GROUP: Dict[str, Prop] = {
                   rng=(0.0, None), ro=True),
 }
 
+#: the rows a clip answers with: the window onto a sample and the marks inside it.
+#  ``start`` and ``count`` are the whole of the view - there is no camera behind
+#  them, which is why both are rows a script can read and write rather than a
+#  transform a face keeps to itself: two numbers are also what a preset saves and
+#  what a range knob writes, so the panel that holds the four markers is editing
+#  the same two facts the pointer does. Neither has a ceiling in the table, for the
+#  reason a log view's ``scroll`` has none: how far they can go is a question about
+#  how many samples ``data`` holds, which the widget that draws them knows and the
+#  row that stores the number does not. :mod:`crude.ui.clip` is the one door that
+#  clamps them, and it is the door the face, the gesture and a ``SET`` all go
+#  through, so the window a hand zoomed and the window a script named cannot differ.
+#  ``markers`` is a list of any length because which four of them mean something is
+#  the script's business and not the table's; ``playhead`` keeps the ``decimals``
+#  row's precedent of a negative meaning *none* rather than borrowing a bool for it.
+_CLIP: Dict[str, Prop] = {
+    "start": _row("start", "number", 0.0,
+                  "The first sample the window shows; the window slides by "
+                  "writing this, and the clip keeps it inside what ``data`` holds.",
+                  rng=(0.0, None)),
+    "count": _row("count", "number", 0.0,
+                  "How many samples the window shows; 0 is all of them, which "
+                  "is what a zoomed-out clip holds.",
+                  rng=(0.0, None)),
+    "markers": _row("markers", "list", (),
+                    "Sample positions drawn as lines and grabbed by the pointer, "
+                    "in the order the script listed them; empty draws none."),
+    "playhead": _row("playhead", "number", -1.0,
+                     "The sample the cursor sits on; -1 draws no cursor at all, "
+                     "the way a -1 elsewhere in the table means 'no limit'.",
+                     rng=(-1.0, None)),
+    "follow": _row("follow", "bool", False,
+                   "Keep the playhead inside the window by sliding it, stopping "
+                   "at either end instead of centring a cursor that is not there."),
+}
+
 #: every row a kind may ask for by name, in one place, so asking for a row that
 #  is not there is an error that names the rows that are
 _TEMPLATE: Dict[str, Prop] = {**_VALUE, **_ITEMS, **_SYNTH, **_SCROLL,
-                              **_GRID, **_GROUP}
+                              **_GRID, **_GROUP, **_CLIP}
 
 #: the rows a *pass* measures rather than the pointer writes: the two a viewport
 #  answers with and the four a panel's cells are counted in. They are read off the
@@ -1394,6 +1429,25 @@ _kind("plot", "", hint="A line graph of any value list, autoscaled to the span i
 _kind("logview", "", hint="A scrollable text area; the script appends rows to "
       "``lines`` and the newest that fit are shown, the wheel scrolling them.",
       args=("label",), rows=("lines", "scroll"), role={"default": "grid"})
+# the third canvas is the one with a position: a waveform is a rolling scope that
+# knows nothing about where a sample is, and a recorded take has to be navigated,
+# zoomed and marked, so its window is two rows and its marks are a list. ``data``
+# and ``points`` are the scope's own rows restated - which is exactly what the
+# tweak table is for, because a clip's ``points`` is a *drawing budget* folded into
+# the box's columns rather than a count of samples to show, and a tooltip that said
+# the scope's meaning over a clip would be a lie told by the right table.
+_kind("clip", "", hint="A recorded or loaded sample with an axis in samples: "
+      "``start``/``count`` are the visible window, ``markers`` are draggable "
+      "lines and the wheel zooms about the pointer.",
+      args=("label",),
+      rows=("data", "start", "count", "markers", "playhead", "follow",
+            "points"),
+      role={"default": "grid"},
+      data={"hint": "Every sample the clip holds, oldest first - the whole "
+                    "take, not the window drawn from it; empty draws silence."},
+      points={"hint": "The most columns the face folds the visible window into; "
+                      "0 is one per pixel of the box, and a longer sample is "
+                      "min/max per column rather than one line per sample."})
 # the scroll area is a panel and nothing else: children clip to it because a panel
 # clips to it, and its one job is to slide the child panel ``content_child`` holds
 # for it. No Pd box is a viewport, so ``pd_object`` stays '' and the whole table is

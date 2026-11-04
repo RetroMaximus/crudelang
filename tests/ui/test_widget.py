@@ -31,10 +31,10 @@ from crude.ui import (CONTAINER_KIND, InputRouter, MEASURED, MODS,
                       WidgetError, define, define_prop, format_value,
                       install_behaviour, reset, root_panel, top_at)
 
-#: the twenty-three kinds the catalog ships, same list as :mod:`test_props`
+#: the twenty-four kinds the catalog ships, same list as :mod:`test_props`
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "plot", "logview", "scroll", "group",
+           "waveform", "spectrum", "plot", "logview", "clip", "scroll", "group",
            "adsr", "curve", "xy", "keybed", "preset_bar")
 
 

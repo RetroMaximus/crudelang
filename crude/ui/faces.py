@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .clip import envelope, marker_pixels, pixel_of, window_of
 from .geometry import TAU, Point, TEXT_HEIGHT, clamp, rect_corners
 from .group import (MARK_FOLDED, MARK_OPEN, TITLE_PAD, chevron_box,
                     foldable_of, folded_of, header_box, title_of)
@@ -296,6 +297,71 @@ def _draw_logview(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
             break
         renderer.text(left, top + slot * line_h, rows[index], found.font,
                       found.ink, align="left")
+    return renderer.op_count - before
+
+
+def _draw_clip(widget: Any, renderer: Any, skin: Skin, found: Any) -> int:
+    """The sample window: an envelope, the marks in it, and the cursor on it.
+
+    Three things are drawn and all three are read out of :mod:`crude.ui.clip`, the
+    same module the gesture asks its questions of, so the line a hand can grab is
+    the line the eye was shown - the rule a scroll thumb, a grid cell and a group
+    chevron each keep, kept a fourth time here.
+
+    The sound is a min/max bar per column rather than a polyline, because a clip is
+    a *file*: 200 000 samples arrive as 200 000 vertices for a plate two hundred
+    pixels wide, and what a person reads off a recorded take is where the peaks are.
+    Only the columns the window is folded into draw, so a take longer than the box
+    is still one bar per pixel and a window slid past its end draws the empty plate
+    it is, rather than a line arguing about samples that are not there.
+
+    The numbers above the marks are the whole reason four markers can be told
+    apart: a clip's marks are one list in the order the script wrote it, and a
+    panel whose first entry is the rough start says so on the plate rather than
+    only in its source. They are held back on a box too short for a line of text,
+    which is the same courtesy a knob's label is not asked to pay when there is no
+    room for it.
+    """
+    before = renderer.op_count
+    left, top, width, height = widget.content_box()
+    if width <= 0.0 or height <= 0.0:
+        return 0
+    guide = skin.resolve("grid", "hover").ink
+    middle = top + height * 0.5
+    renderer.line((left, top + height), (left + width, top + height),
+                  color=guide)
+    renderer.line((left, middle), (left + width, middle), color=guide)
+    held = envelope(widget)
+    if not held:
+        # silence, or a window onto nothing: the same flat trace a scope with an
+        # empty buffer draws, so a clip built before its take arrived is not blank
+        renderer.line((left, middle), (left + width, middle), color=found.ink)
+    else:
+        half = height * 0.5
+        slot = width / len(held)
+        side = max(1.0, slot * 0.7)
+        for across, low, high in held:
+            floor = middle - clamp(low, -1.0, 1.0) * half
+            ceiling = middle - clamp(high, -1.0, 1.0) * half
+            renderer.rect(across - side * 0.5, ceiling, side,
+                          max(1.0, floor - ceiling), found.ink)
+    mark = skin.resolve("accent")
+    line_h = found.font * TEXT_HEIGHT
+    for index, across in marker_pixels(widget):
+        renderer.line((across, top), (across, top + height), color=mark.fill)
+        if height >= line_h:
+            # numbered by the marker's own place in the list the script wrote, not
+            # by its rank among the marks this window happens to show: scroll away
+            # from the rough start and the two you can still see are 3 and 4, which
+            # is what a knob wired to ``markers[2]`` says they are
+            renderer.text(across, top, str(int(index) + 1), found.font, mark.fill,
+                          align="center")
+    cursor = float(widget.get("playhead") or 0.0)
+    first, span = window_of(widget)
+    if cursor >= 0.0 and span > 0.0 and first <= cursor <= first + span:
+        across = pixel_of(widget, cursor)
+        renderer.line((across, top), (across, top + height),
+                      color=skin.resolve("thumb").fill)
     return renderer.op_count - before
 
 
@@ -804,6 +870,10 @@ FACES: Dict[str, Face] = {
     "spectrum": _plot_spectrum,
     "plot": _draw_plot,
     "logview": _draw_logview,
+    # the canvas with a position: drawn entirely out of the arithmetic the
+    # gesture and the follow pass use, so no number on the plate is a second
+    # opinion about where a sample is
+    "clip": _draw_clip,
     "adsr": _draw_envelope,
     "curve": _draw_curve,
     "xy": _draw_pad,

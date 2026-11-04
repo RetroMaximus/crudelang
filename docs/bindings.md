@@ -271,7 +271,7 @@ SLIDER(label, lo, hi, value)   VSLIDER(...)   NUMBER(label, lo, hi, value)
 METER(label, lo, hi, value)    RADIO(values)   DROPDOWN(values)
 PANEL(title)   XY_PAD(label, x, y)   KEYBED(label, low, octaves)   ADSR(...)   CURVE(...)
 SPECTRUM       WAVEFORM         PLOT(label)         LOGVIEW(label)
-PRESET_BAR(...)   PANEL(...)   SCROLL(label)   GROUP(title[, parent])
+CLIP(label)   PRESET_BAR(...)   PANEL(...)   SCROLL(label)   GROUP(title[, parent])
 ```
 
 Placement and layout:
@@ -351,6 +351,23 @@ Tier B sugar (S12) reaches these same names, never new ones: a
 top-level `ON w EVENT handler` statement, both desugar to the `ON_*`
 call above (`FRAME` keeping its one-argument shape). `scripting.md`
 owns the full block grammar.
+
+State a handler was never handed:
+
+```
+MOD_HELD(word)
+```
+
+`MOD_HELD("shift")` answers `1` while that key is down and `0` while it is not,
+read off the router's live modifier word; the words are `shift`, `control`,
+`alt` and `super`, and any other is refused by name rather than answered `0`,
+because `0` is a real answer and a typo must not look like one. A press hands
+its modifiers to the behaviour that moves a value, but a script deciding a
+thing a frame later - a row click that *adds* a track to the ones already
+selected, a face that paints differently while control is down - has no
+argument holding that word, and a project that wrote `0x0001` for it would
+break the day the mask moves. With no window attached the answer is `0`: a
+headless run has nothing to ask.
 
 Painter ops (the `P_*` names a custom kind's `ON_PAINT` uses):
 

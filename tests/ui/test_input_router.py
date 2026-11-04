@@ -388,6 +388,77 @@ def test_a_wheel_over_nothing_is_answered_by_no_one(router, knob):
     assert router.names()[-1] == "leave"
 
 
+# -- the modifier word that outlives its event --------------------------------
+
+def test_the_router_holds_which_modifiers_are_down_right_now(router, knob):
+    """``mods`` is live state, not an argument that happens to be in hand.
+
+    :func:`crude.bindings.ui.mod_held` reads this, and it is read *after* the
+    dispatch that set it: a click handler runs inside the dispatch and can use the
+    word it was handed, but a frame handler - and a script that asks which key the
+    person is holding while they drag - has to ask the router what it still knows.
+    So the word survives being answered, and a bare pointer move must not invent one.
+    """
+    assert router.mods == 0, "nothing was ever pressed"
+    router.on_button(MOUSE_BUTTONS["left"], ACTIONS["press"], MODS["shift"])
+    router.dispatch()
+    assert router.mods == MODS["shift"]
+    router.on_cursor(30, 30)
+    router.dispatch()
+    assert router.mods == MODS["shift"], "the cursor carries no keys"
+    # a frame boundary is not the person letting go: reset forgets the frame
+    router.reset()
+    assert router.mods == MODS["shift"]
+    # and GLFW reports the state *after* the key came up, which is the whole answer
+    shift = next(code for code, word in KEY_NAMES.items() if word == "shift")
+    router.on_key(shift, 0, ACTIONS["release"], 0)
+    router.dispatch()
+    assert router.mods == 0
+
+
+def test_two_keys_down_are_two_bits_in_the_one_word(router, knob):
+    """A word is read a bit at a time, so shift-click can also be a fine drag.
+
+    The router only ever stores the combined number; every reader on the widget side
+    tests one bit of it. Pinning that here is what keeps ``MOD_HELD("shift")`` from
+    being written as ``mods == 1`` by the next person to need it.
+    """
+    both = MODS["shift"] | MODS["control"]
+    router.move_to(20, 20)
+    router.on_button(MOUSE_BUTTONS["left"], ACTIONS["press"], both)
+    router.dispatch()
+    assert router.mods == both
+    assert router.mods & MODS["shift"] and router.mods & MODS["control"]
+    assert not router.mods & MODS["alt"], "a word answers for keys nobody pressed"
+    # the fine delta reads its own bit and leaves the other one for the script
+    knob.calls = []
+    router.move_to(36, 20)
+    assert knob.of("drag") == [("drag", 16.0 / DRAG_FINE, 0.0, both)]
+
+
+def test_only_the_pointer_knows_where_it_is_and_the_gestures_do_not(router, knob):
+    """A move carries a position; a drag and a wheel carry a movement and a word.
+
+    That asymmetry is GLFW's, not this router's, and a widget that wants to act on
+    *what the pointer is over* - a clip zooming about the sample under the cursor -
+    has to have remembered the place it was told, because nothing will tell it again.
+    """
+    router.move_to(20, 20)
+    router.press()
+    knob.calls = []
+    router.move_to(30, 25)
+    router.scroll_at(1.0)
+    assert knob.of("drag") == [("drag", 10.0, 5.0, 0)]
+    assert knob.of("scroll") == [("scroll", 0.0, SCROLL_NOTCH, 0)]
+    # the place the pointer reached is in the move and nowhere else: 30, 25 is the
+    # cursor, and neither gesture's numbers are the cursor
+    assert knob.of("move") == [("move", 30.0, 25.0)]
+    for call in knob.of("drag") + knob.of("scroll"):
+        assert 30.0 not in call[1:3] and 25.0 not in call[1:3], call
+    router.release()
+    assert knob.of("release") == [("release", 30.0, 25.0, 0, 0)]
+
+
 # -- keys and characters ------------------------------------------------------
 
 def test_a_key_goes_to_what_has_focus(router, knob):

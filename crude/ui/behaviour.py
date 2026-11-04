@@ -40,6 +40,8 @@ from __future__ import annotations
 import math
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .clip import (nearest_marker, pan_from, samples_per_pixel, set_marker,
+                   window_of, zoom_at)
 from .geometry import clamp
 from .group import drop, fold, on_header, on_mark
 from .input import SCROLL_NOTCH
@@ -757,6 +759,96 @@ def _viewport() -> Dict[str, Callable[..., Any]]:
 
 
 # --------------------------------------------------------------------------
+# the clip: a window onto a recorded take
+# --------------------------------------------------------------------------
+
+def _clipview() -> Dict[str, Callable[..., Any]]:
+    """A ``clip``: grab a mark, drag the take, wheel the zoom.
+
+    Three gestures and one number the router never sends. A wheel and a drag carry
+    a *movement* - the widget that captured the pointer keeps it after the cursor
+    leaves the box - so the sample the pointer is sitting on, which is the one a
+    zoom has to hold still, is remembered from the ``on_move`` events that ran in
+    front of the scroll. That is what the scratch's ``at`` is for, and a clip that
+    has never been told where the pointer is (a wheel pushed by a script, a tree
+    that moved under a cursor that did not) aims at the middle of the box, which is
+    the one sample a person who has not moved the pointer can be said to be looking
+    at.
+
+    Everything else is the ruler, and the ruler is :mod:`crude.ui.clip`: the
+    mapping its ``sample_at``/``pixel_of`` answer is what the face draws with, so a
+    mark a hand closes on is exactly the mark the eye was shown, and the window
+    this drags is the ``start``/``count`` a script reads back with a ``GET`` - which
+    is what makes ``SET(c, "start", 0)`` and a hand on the take one gesture rather
+    than two mechanisms that can disagree.
+
+    A press on empty plate grabs the take rather than moving the playhead. The
+    cursor is the script's to place - a recorder parks it with a knob and the
+    ``follow`` row brings the view along behind it - and a press that jumped the
+    cursor would leave no way to pan the plate without dragging a mark out of place.
+    A project that wants the jump can have it with ``ON_CLICK``, which runs after
+    this and may write over it.
+    """
+
+    def _aim(widget: Any) -> float:
+        """The pixel a zoom is measured from: where the pointer is, or the middle."""
+        held = _held(widget).get("at")
+        if held is not None:
+            return float(held)
+        left, _top, width, _height = widget.content_box()
+        return left + width * 0.5
+
+    def moving(widget: Any, args: Tuple[Any, ...]) -> None:
+        # the one event that carries a position while nothing is being pressed, and
+        # therefore the only one that can say what a wheel is sitting over
+        _held(widget)["at"] = float(_args(args, 0))
+
+    def pressed(widget: Any, args: Tuple[Any, ...]) -> None:
+        if not _is_gesture(args):
+            return
+        scratch = _held(widget)
+        scratch["pull"] = 0.0
+        index = nearest_marker(widget, float(_args(args, 0)))
+        marks = widget.get("markers") or ()
+        if index is not None and 0 <= int(index) < len(marks):
+            scratch["mark"] = int(index)
+            # anchored at the mark's own sample, so the drag below is measured from
+            # where the hand closed on it rather than from its first increment
+            scratch["from"] = float(marks[int(index)])
+            return
+        scratch.pop("mark", None)
+        scratch["from"] = window_of(widget)[0]
+
+    def dragged(widget: Any, args: Tuple[Any, ...]) -> None:
+        scratch = _held(widget)
+        if "from" not in scratch:
+            return  # a drag the press did not start here is not this widget's
+        moved = float(_args(args, 0))
+        if not moved:
+            return
+        scratch["pull"] = float(scratch.get("pull", 0.0)) \
+            + moved * samples_per_pixel(widget)
+        if "mark" in scratch:
+            set_marker(widget, scratch["mark"],
+                       float(scratch["from"]) + float(scratch["pull"]))
+            return
+        pan_from(widget, scratch["from"], scratch["pull"])
+
+    def released(widget: Any, args: Tuple[Any, ...]) -> None:
+        scratch = _held(widget)
+        for word in ("mark", "from", "pull"):
+            scratch.pop(word, None)
+
+    def scrolled(widget: Any, args: Tuple[Any, ...]) -> None:
+        notches = _notches(args)
+        if notches:
+            zoom_at(widget, _aim(widget), notches)
+
+    return {"on_move": moving, "on_press": pressed, "on_drag": dragged,
+            "on_release": released, "on_scroll": scrolled}
+
+
+# --------------------------------------------------------------------------
 # the group: a fold on the mark, a dock on the handle
 # --------------------------------------------------------------------------
 
@@ -1092,7 +1184,9 @@ BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     # the synth widgets. waveform and spectrum are deliberately absent: they
     # show what a script pushes into ``data`` and hold no value to move, so a
     # gesture on a scope means nothing until a script says otherwise with an
-    # ON_CLICK. preset_bar gets its own row rather than relying on the chain:
+    # ON_CLICK - the clip below is the canvas that does answer, because a
+    # recording has a length and a person has to be somewhere inside it.
+    # preset_bar gets its own row rather than relying on the chain:
     # the table is the list of what answers, and an inherited "it's a radio"
     # is a lookup answer, not a declaration - and a declaration is what the
     # parity test reads.
@@ -1105,6 +1199,9 @@ BEHAVIOURS: Dict[str, Dict[str, Callable[..., Any]]] = {
     # a viewport moves its content rather than a value, and every one of its
     # gestures writes the ``offset`` prop the content panel is placed from
     "scroll": _viewport(),
+    # a clip moves its *window* rather than a value, and writes the two props the
+    # face is drawn from; a mark it moves is the third thing a script can read back
+    "clip": _clipview(),
     # a group moves nothing of its own value: one target folds it and the other
     # hands it to whatever cell the pointer was over when it let go
     "group": _group(),

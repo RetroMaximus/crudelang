@@ -31,6 +31,7 @@ from crude.bindings.ui import (
 from crude.lang import Program
 from crude.lang.values import HostHandle, List, Number, String
 from crude.ui import (
+    MODS,
     POINTER,
     SCRIPT_EVENTS,
     WIDGET_EVENTS,
@@ -113,7 +114,8 @@ _EXPECTED_BINDINGS = (
     "WIDGET",
     "PANEL", "TEXT", "BUTTON", "TOGGLE", "SLIDER", "VSLIDER", "KNOB",
     "NUMBER", "METER", "RADIO", "DROPDOWN",
-    "WAVEFORM", "SPECTRUM", "PLOT", "LOGVIEW", "ADSR", "CURVE", "XY_PAD", "KEYBED",
+    "WAVEFORM", "SPECTRUM", "PLOT", "LOGVIEW", "CLIP", "ADSR", "CURVE",
+    "XY_PAD", "KEYBED",
     "PRESET_BAR", "SCROLL",
     "ICON", "GROUP",
     "WIDGET_DEFINE", "PROP_DEFINE",
@@ -127,7 +129,7 @@ _EXPECTED_BINDINGS = (
     "ON_RELEASE", "ON_CLICK", "ON_FOCUS", "ON_BLUR", "ON_KEY",
     "ON_CHAR", "ON_SCROLL", "ON_DRAG", "ON_RESIZE", "ON_DROP", "ON_CLOSE",
     "ON_PAINT", "ON_HIT",
-    "ON_FRAME", "OFF", "OFF_FRAME",
+    "ON_FRAME", "OFF", "OFF_FRAME", "MOD_HELD",
     "WIDTH", "HEIGHT",
     "P_RECT", "P_CIRCLE", "P_ARC", "P_LINE", "P_POLY", "P_TEXT",
     "P_GLYPH", "P_IMAGE", "P_CLIP", "P_CLIP_END", "PAINT_REQUEST",
@@ -165,6 +167,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("SPECTRUM", ("label",), 1),
     ("PLOT", ("label",), 1),
     ("LOGVIEW", ("label",), 1),
+    ("CLIP", ("label",), 1),
     ("ADSR", ("label", "attack", "decay", "sustain", "release"), 5),
     ("CURVE", ("label", "tension"), 2),
     ("XY_PAD", ("label", "x", "y"), 3),
@@ -199,6 +202,7 @@ def test_every_ui_binding_is_registered_under_the_ui_area():
     ("ON_FRAME", ("func",), 0),
     ("OFF_FRAME", ("func",), 1),
     ("OFF", ("widget", "event", "func"), 3),
+    ("MOD_HELD", ("word",), 0),
     ("WIDTH", ("what",), 0),
     ("HEIGHT", ("what",), 0),
     ("P_RECT", ("p", "x", "y", "width", "height", "radius", "role"), 2),
@@ -288,6 +292,7 @@ _DIRECT_CONSTRUCTORS = [
     ("SPECTRUM", "spectrum", [("label", '"analyst"')]),
     ("PLOT", "plot", [("label", '"graph"')]),
     ("LOGVIEW", "logview", [("label", '"log"')]),
+    ("CLIP", "clip", [("label", '"take"')]),
     ("ADSR", "adsr", [
         ("label", '"env"'), ("attack", "10"), ("decay", "20"),
         ("sustain", "0.5"), ("release", "30"),
@@ -396,6 +401,7 @@ def test_every_catalog_kind_has_its_own_constructor(run):
         "ICON": '"play"', "RADIO": '["a", "b"]', "DROPDOWN": '["a", "b"]',
         "WAVEFORM": '"x"', "SPECTRUM": '"x"', "PLOT": '"x"',
         "LOGVIEW": '"x"', "ADSR": '"x"', "CURVE": '"x"',
+        "CLIP": '"x"',
         "XY_PAD": '"x"', "KEYBED": '"x"', "PRESET_BAR": '["a", "b"]',
         "SCROLL": '"x"', "GROUP": '"x"',
     }
@@ -669,6 +675,77 @@ def test_on_frame_and_off_frame_are_window_scoped(stage):
     ctx.frame(dt=0.016)
     value, _ = program.run('GET(n, "value")')
     assert as_py(value) == 2.0, "the counter stopped with the handler"
+
+
+# -- MOD_HELD: the keyboard state a handler is not handed ---------------
+
+
+def test_mod_held_reads_the_router_s_live_modifier_word(stage):
+    """One word in, 1 or 0 out, and the answer is the state the pointer is in now.
+
+    The mask is the router's own: a script that asks for ``"shift"`` never has to
+    know which bit it is, so the same line keeps answering if the bit moves.
+    """
+    program, ctx, _ = stage
+
+    def asked(word):
+        value, error = program.run(f'MOD_HELD("{word}")')
+        assert error is None, error.as_string()
+        return as_py(value)
+
+    ctx.router.mods = MODS["shift"]
+    assert asked("shift") == 1
+    assert asked("control") == 0
+    assert asked(" Shift ") == 1, "a script's word is tidied, not guessed at"
+    ctx.router.mods = MODS["shift"] | MODS["control"]
+    assert asked("shift") == 1
+    assert asked("control") == 1
+    assert asked("alt") == 0
+    ctx.router.mods = 0
+    assert asked("shift") == 0
+
+
+def test_a_handler_asks_the_keyboard_what_the_pointer_did_not_hand_it(stage):
+    """A click reaches a script without its modifiers, which is the whole reason
+    a multi-select - shift-click meaning *add this track to the ones picked* - has
+    to ask the question a frame after the press rather than be handed the answer.
+    """
+    program, ctx, _ = stage
+    _, error = program.run(
+        'VAR picked = NUMBER("picked", 0, 1, 0)\n'
+        'VAR row = PANEL("track")\n'
+        "PLACE(row, 0, 0, 100, 20)\n"
+        'ON_CLICK(row, FUNC() -> SET(picked, "value", MOD_HELD("shift")))\n'
+    )
+    assert error is None, error.as_string()
+    ctx.router.press(0, mods=MODS["shift"])
+    ctx.router.release(0, mods=MODS["shift"])
+    value, error = program.run('GET(picked, "value")')
+    assert error is None, error.as_string()
+    assert as_py(value) == 1.0
+    ctx.router.press(0)
+    ctx.router.release(0)
+    value, _ = program.run('GET(picked, "value")')
+    assert as_py(value) == 0.0, "a plain click is a different selection"
+
+
+def test_mod_held_answers_zero_when_there_is_no_window():
+    """No UI is no modifier held: the question is answerable, and is not an error.
+
+    Every other word here fails with "no UI runtime is attached", and that is right
+    for a verb that *needs* a tree. A script that asks which keys are down has a
+    default that is true of a headless run, so the run keeps going.
+    """
+    value, error = Program("<ui-test>",
+                           host=types.SimpleNamespace()).run('MOD_HELD("shift")')
+    assert error is None, error
+    assert as_py(value) == 0
+
+
+def test_mod_held_refuses_a_word_that_is_not_a_modifier(ui_failure):
+    error = ui_failure('MOD_HELD("caps")')
+    assert "'caps' is not a modifier" in error
+    assert "shift" in error, "the refusal says what the words are"
 
 
 # -- style --------------------------------------------------------------

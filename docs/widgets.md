@@ -31,7 +31,7 @@ Widget {
 Every constructor the catalog names - `TEXT`, `BUTTON`, `SLIDER`,
 `TOGGLE`, `METER`, `NUMBER`, `VSLIDER`, `KNOB`, `RADIO`, `DROPDOWN`,
 `XY_PAD`, `KEYBED`, `ADSR`, `CURVE`, `SPECTRUM`, `WAVEFORM`, `PLOT`,
-`LOGVIEW`, `PRESET_BAR`, `PANEL`, `SCROLL`, `ICON`, `GROUP` - builds one
+`LOGVIEW`, `CLIP`, `PRESET_BAR`, `PANEL`, `SCROLL`, `ICON`, `GROUP` - builds one
 `Widget` and returns a `HostHandle(kind="widget")` the script holds onto.
 `WIDGET(kind, ...)` is the generic form every catalog helper wraps, and it is
 how a kind with no sugar word of its own is built - `WIDGET("logview")` and
@@ -210,7 +210,7 @@ is the check that a widget's own kind holds one named prop.
 
 ## Canvases
 
-Four kinds draw whatever a script pushes into their `data` / `lines` rows
+Five kinds draw whatever a script pushes into their `data` / `lines` rows
 rather than a single value - they turn a list into a picture, and the
 script feeds them from `ON_FRAME`:
 
@@ -228,10 +228,75 @@ script feeds them from `ON_FRAME`:
   script appends rows to its `lines` prop and the newest that fit are shown;
   the wheel moves `scroll` to read older ones. It has no `value` row and no
   Pd twin - it is a place to read, not to send.
+- `CLIP(label)` (or `WIDGET("clip")`) - a sample with an axis in *samples*.
+  A scope is a rolling trace that knows nothing about where a reading was
+  taken; a recorded or loaded take has to be navigated, zoomed and marked, so
+  a clip keeps a window (`start`/`count`), a list of draggable marks
+  (`markers`) and a cursor (`playhead`). See "The clip" below.
 
-`plot` and `logview` are role `grid` kinds with an empty `pd_object`, so
+`plot`, `logview` and `clip` are role `grid` kinds with an empty `pd_object`, so
 they reach the same `GET`/`SET` schema as the rest of the catalog but are
 never emitted to a `.pd` file.
+
+## The clip
+
+`CLIP(label)` is a canvas with a position. Everything about it is one ruler -
+:mod:`crude.ui.clip`'s `sample_at` and `pixel_of` - that the face, the pointer
+and a script's `GET` all read, so a mark a hand closes on is the mark the eye
+was shown and the window a hand dragged is the window `GET(c, "start")` answers
+with.
+
+| Prop       | Read as                                              |
+| ---------- | ---------------------------------------------------- |
+| `data`     | every sample the clip holds, oldest first - the whole take, not the window drawn from it; empty draws the flat line of silence, and a value that is not a number is drawn as silence rather than dropped out of the list |
+| `start`    | the first sample the window shows; the clip keeps it inside what `data` holds |
+| `count`    | how many samples the window shows; `0` is *all of them, including what arrives next*, which is what a zoomed-out clip holds while a recording is still running |
+| `markers`  | sample positions drawn as lines and grabbed by the pointer, in the order the script listed them and numbered from 1 at the top of the plate; any length, so four are a rough/fine pair at each end and two are a loop |
+| `playhead` | the sample the cursor sits on; `-1` draws no cursor at all, the way a `-1` elsewhere in the table means "no limit" |
+| `follow`   | keep the cursor inside the window by sliding it, stopping at either end of the take instead of centring a cursor that is not there |
+| `points`   | the most columns the face folds the window into; `0` is one per pixel of the box, so a 200 000-sample file draws as ~700 bars rather than a polyline the painter would choke on |
+
+The window is two numbers and not a hidden camera. `count` wider than the take
+is kept as it was written and resolved when it is drawn, so a file still
+loading is fully shown without anyone re-writing the row; `start` is clamped
+against the width it is about to have, and the clamp runs through one door
+(`set_window`), which is why a `SET` and a hand cannot leave two different
+windows behind. Sample numbers are whole at both write doors: a mark dragged
+across two hundred pixels lands on a number a knob wired to `markers[2]` can
+compare with.
+
+Three gestures, none of which writes a `value` - a clip holds none:
+
+- a press within six pixels of a mark drags *that* mark and no other; holding
+  control divides the movement, so the fine adjustment is sub-sample;
+- a press on empty plate grabs the take and slides it, and a window that
+  already *is* the take refuses rather than freezing `count` into today's
+  length. The press does not jump the playhead: the cursor is the script's to
+  place, and a project that wants the jump can take it with `ON_CLICK`, which
+  runs after this and may write over it;
+- the wheel zooms about the sample under the pointer, in ratio steps, down to
+  a floor of one sample and out to the whole take. A wheel carries a movement
+  and no position, so the clip remembers the place it was last told by
+  `ON_MOVE`; a clip that was never told - a wheel pushed by a script, a tree
+  that moved under a cursor that did not - aims at the middle of the plate.
+
+A mark the window has scrolled past is neither drawn nor grabbable, and a
+number that is off the plate is not re-numbered by the marks that happen to be
+visible: scroll away from the rough start and the two you can still see are 3
+and 4. A plate too short for a line of text keeps the lines and gives up the
+numbers, because the marks are the information and the numbering is decoration.
+
+`follow` is a layout pass, not a painter. A draw may not write a prop, so
+`crude.ui.clip.follow_all` runs beside the restack and the grid reconcile in
+`UIContext.layout` and answers how many windows it actually moved - a frame
+with a parked cursor or a fully-shown take counts zero and writes nothing.
+
+`clip` here is the widget; `P_CLIP(p, x, y, width, height)` / `P_CLIP_END(p)`
+are a painter's clipping rectangle and have nothing to do with it, and
+`Widget`'s own `clip` (the box a child is drawn inside) is a third thing. The
+three names cannot be merged, so the rows are spelled out: a prop table entry
+or a `SET` word of `"start"`, `"count"` or `"markers"` is the widget's, and a
+`clip` argument to a paint call is not.
 
 ## The scroll area
 

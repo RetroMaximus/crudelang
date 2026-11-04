@@ -32,13 +32,14 @@ from crude.ui import (KINDS, PD_BOXES, ROLES, SCHEMA, SIZES, TYPES, Kind, Prop,
                       prop_names, props_of, registered_names, reset, settle,
                       settled, states, UIError, value_of)
 
-#: the twenty-three kinds the plan's widget list adds up to: the twelve faces and
+#: the twenty-four kinds the plan's widget list adds up to: the twelve faces and
 #  controls, plus the nine synth widgets and canvases S9 put on the same
-#  conventions, plus the viewport the settings dialog grew into a kind, plus the
-#  section a page is built out of
+#  conventions, plus the clip a recorder plots and cuts a take in, plus the
+#  viewport the settings dialog grew into a kind, plus the section a page is built
+#  out of
 CATALOG = ("panel", "text", "icon", "button", "toggle", "slider", "vslider",
            "knob", "number", "meter", "radio", "dropdown",
-           "waveform", "spectrum", "plot", "logview", "scroll", "group",
+           "waveform", "spectrum", "plot", "logview", "clip", "scroll", "group",
            "adsr", "curve", "xy",
            "keybed", "preset_bar")
 
@@ -549,6 +550,44 @@ def test_the_logview_is_a_scrollable_text_area_the_script_appends_to():
     assert get_kind("logview").get("scroll").minimum == 0.0
     assert get_kind("logview").get("scroll").maximum is None
     assert settled("logview", {"scroll": -4})["scroll"] == 0.0
+
+
+# -- the clip: a window onto a take ---------------------------------------
+
+
+def test_the_clip_is_a_sample_window_a_script_and_a_hand_both_move():
+    """A clip holds a take and a piece of it, and holds no value of its own.
+
+    The two numbers a plot does not have are the whole kind: ``data`` is the file
+    and ``start``/``count`` are where the plate is looking in it. A range row would
+    be a second answer to a question those two already tell, which is why a clip is
+    a ``plot`` with a position rather than a slider that draws a waveform.
+    """
+    clip = get_kind("clip")
+    names = set(prop_names("clip"))
+    assert {"data", "start", "count", "markers", "playhead", "follow",
+            "points"} <= names, clip
+    assert clip.pd_object == "", "a clip is a plate, not a vanilla Pd box"
+    assert clip.args == ("label",)
+    assert not names & set(("value", "min", "max", "step", "log")), clip
+    built = settled("clip", {"data": [0.0, 0.5, -0.5], "start": 1, "count": 2,
+                             "markers": [0, 2], "playhead": 1.5,
+                             "follow": "yes"})
+    assert built["data"] == [0.0, 0.5, -0.5]
+    assert built["markers"] == [0, 2]
+    assert (built["start"], built["count"]) == (1.0, 2.0)
+    assert built["playhead"] == 1.5
+    assert built["follow"] is True
+    # 0 is the number that means "every sample there is", at both ends of the table
+    assert (settled("clip")["start"], settled("clip")["count"]) == (0.0, 0.0)
+    # and -1 is the number that means "no cursor", the way -1 means no limit
+    # everywhere else in the table
+    assert settled("clip")["playhead"] == -1.0
+    assert get_kind("clip").get("playhead").maximum is None
+    assert get_kind("clip").get("start").minimum == 0.0
+    assert get_kind("clip").get("count").minimum == 0.0
+    assert settled("clip", {"start": -10, "count": -1})["start"] == 0.0
+    assert settled("clip", {"count": -1})["count"] == 0.0
 
 
 # -- inheritance -------------------------------------------------------------
