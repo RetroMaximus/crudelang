@@ -6,7 +6,7 @@ sounddevice>=0.5.6
 # pyaudio is deliberately absent: it is the audio fallback backend, optional at
 # runtime and without a cp314 wheel, so crude only looks for it if it is there.
 glfw>=2.11.0
-PyOpenGL>=3.1.7
+PyOpenGL>=3.1.10
 pyserial>=3.5
 # python-rtmidi is deliberately absent: it is the MIDI backend, optional at runtime
 # and without a guaranteed cp314 wheel, so crude only looks for it if it is there
