@@ -93,7 +93,7 @@ audio callback and the draw loop.
 
 ```bash
 # 1. get the source
-git clone https://github.com/your-org/crudelang.git
+git clone https://github.com/RetroMaximus/crudelang.git
 cd crudelang
 
 # 2. an isolated environment
