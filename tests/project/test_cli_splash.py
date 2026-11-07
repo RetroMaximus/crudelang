@@ -149,7 +149,7 @@ def test_a_window_project_draws_its_progress_while_it_loads(deck, displays, caps
     assert display.begins > 1
     assert "script.compile" in " ".join(display.texts())
 
-
+@pytest.mark.requires_gl
 def test_the_very_first_frame_shows_the_plan(deck, displays):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
 
@@ -160,7 +160,7 @@ def test_the_very_first_frame_shows_the_plan(deck, displays):
     assert "deck" in " ".join(said)
     assert "manifest" in " ".join(said)
 
-
+@pytest.mark.requires_gl
 def test_the_splash_ends_at_a_hundred_percent_in_the_done_colour(deck, displays):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
 
@@ -170,14 +170,14 @@ def test_the_splash_ends_at_a_hundred_percent_in_the_done_colour(deck, displays)
     boxes = [op for op in last if op.name == "rect"]
     assert str(boxes[-1].get("color")).startswith(PALETTE["done"])
 
-
+@pytest.mark.requires_gl
 def test_the_window_is_closed_when_the_run_is_over(deck, displays):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
 
     display = displays.made[0]
     assert display.closed is True
 
-
+@pytest.mark.requires_gl
 def test_a_load_that_failed_still_closes_the_window_it_opened(deck, displays,
                                                               capsys):
     assert main(["run", deck(BROKEN)]) != EXIT_OK
@@ -189,7 +189,7 @@ def test_a_load_that_failed_still_closes_the_window_it_opened(deck, displays,
     assert any("script" in text for text in display.texts())
     assert "script.compile" in err or "main.crude" in err
 
-
+@pytest.mark.requires_gl
 def test_the_window_title_is_the_project(deck, displays):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
 
@@ -197,7 +197,7 @@ def test_the_window_title_is_the_project(deck, displays):
 
 
 # -- the downgrade, said out loud -------------------------------------------
-
+@pytest.mark.requires_gl
 def test_a_machine_with_no_display_runs_headless_instead(deck, displays, capsys):
     displays.state["refuse"] = "there is no display to open a window on"
 
@@ -211,7 +211,7 @@ def test_a_machine_with_no_display_runs_headless_instead(deck, displays, capsys)
     assert "script.compile" in out
     assert displays.made == []
 
-
+@pytest.mark.requires_gl
 def test_a_window_project_that_asked_for_console_progress_still_opens_a_window(
         deck, displays, capsys):
     # S11: the frame loop takes over the run's window, so a window-mode project
@@ -223,6 +223,7 @@ def test_a_window_project_that_asked_for_console_progress_still_opens_a_window(
     assert "no frame loop yet" not in err
     assert displays.state["calls"] == 1
 
+@pytest.mark.requires_gl
 
 def test_progress_by_name_beats_the_mode_and_a_terminal_stays_quiet(deck,
                                                                     displays,
@@ -234,6 +235,7 @@ def test_progress_by_name_beats_the_mode_and_a_terminal_stays_quiet(deck,
     assert displays.state["calls"] == 0
     assert displays.made == []
 
+@pytest.mark.requires_gl
 
 def test_a_splash_asked_for_by_name_is_opened_even_in_terminal_mode(deck,
                                                                     displays):
@@ -244,6 +246,7 @@ def test_a_splash_asked_for_by_name_is_opened_even_in_terminal_mode(deck,
     assert displays.state["calls"] == 1
     assert "script.compile" in " ".join(displays.made[0].texts())
 
+@pytest.mark.requires_gl
 
 def test_a_run_that_wants_no_progress_still_opens_a_window_for_the_loop(
         deck, displays, capsys):
@@ -373,7 +376,7 @@ def test_a_driver_that_said_no_in_its_own_words_is_still_a_reason(deck,
 
 
 # -- what the load really drew ----------------------------------------------
-
+@pytest.mark.requires_gl
 def test_the_frames_drawn_during_a_load_are_the_frames_the_plan_took(deck,
                                                                       displays):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
