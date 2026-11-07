@@ -5,7 +5,7 @@ set -e
 
 PROJECT_DIR="/path/to/crudelang"
 LIBPD_SRC="${PROJECT_DIR}/thrid-party/libpd"
-PD_SRC="${PROJECT_DIR}/thrid-party/pure-data"    # your existing Pd source
+PD_SRC="${PROJECT_DIR}/thrid-party/pure-data"
 INSTALL_DIR="${PROJECT_DIR}/libs"
 
 mkdir -p "${INSTALL_DIR}"
