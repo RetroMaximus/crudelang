@@ -57,13 +57,15 @@ def tone_doc():
 # -- the golden ---------------------------------------------------------
 
 
-def test_the_golden_patch_is_written_exactly_as_saved(tone_doc, golden_text):
-    assert write_patch(tone_doc) == golden_text
+def _lf(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
+def test_the_golden_patch_is_written_exactly_as_saved(tone_doc, golden_text):
+    assert write_patch(tone_doc) == _lf(golden_text)
 
 def test_output_is_deterministic(tone_doc, golden_text):
     for _ in range(3):
-        assert write_patch(tone_doc) == golden_text
+        assert write_patch(tone_doc) == _lf(golden_text)
 
 
 def test_links_are_sorted_by_box_position_even_when_declared_later():
