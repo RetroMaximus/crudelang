@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 <a id="top"></a>
 
 ## Optional runtime dependencies

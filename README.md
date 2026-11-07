@@ -45,7 +45,7 @@ crude 0.1.0 · Python 3.12+ · Windows / Linux / macOS
 
 Audio-graphics projects usually mean juggling a synthesis environment, a GUI
 toolkit, an audio driver and a serial library, each with its own mental model.
-`crude` collapses that into **one script**:
+`crude` collapses that into **one script**:4b     
 
 - **Signal + code in one file.** Author Pure Data patches
   (`PD_BUILD` / `PD_OBJ` / `PD_LINK`) directly in the script and reach them from

@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 # Bindings
 
 A binding is one word a script can call. Every binding is declared once,

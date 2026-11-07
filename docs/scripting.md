@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 # Scripting
 
 A crude script is the top-level of a `.crude` file. The interpreter reads

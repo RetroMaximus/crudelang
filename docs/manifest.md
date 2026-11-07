@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 # Manifest
 
 Every crude project is a directory with a `crude.manifest.json` in it. The
