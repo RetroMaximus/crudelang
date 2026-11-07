@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 # Architecture
 
 `crude` is a small runtime with a wide load surface: a project directory, a

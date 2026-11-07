@@ -1,3 +1,5 @@
+[`Back to Documentation`](https://github.com/RetroMaximus/crudelang/blob/main/README.md#documentation)
+
 # MIDI
 
 MIDI is the second real I/O engine after audio, and it is built to the same
