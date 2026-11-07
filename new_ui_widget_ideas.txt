@@ -1,0 +1,32 @@
+adsr
+check_box (rounded edges optional)
+color_picker
+combo_box
+filters
+footerbar
+historgram
+sprite (subject to overlay a button. to act as a button within its bounds. or simply to be place in a root workspace or group)
+progress_bar
+preset_selector
+save__dialog (general purpose save dialog)
+save_as_dialog (general purpose save as dialog) * not the same as save
+load_dialog (general purpose load dialog) * not the same as open
+open_dialog (general purpose open dialog) * not the same as load
+radio_button
+sample_range_markers
+separator
+spinner
+splitter
+tabcontrol
+table
+treeview
+waveform_view (* not the same as osc widget might be used for longer waves)
+accordion (if more then one foldout is in a group ie. if a fold out is dragged from one group to another. it should be placed in the order it was dropped. and existing foldouts should adjust based on where it was dropped.)
+spacer
+high_mid_low's (high = 10khz -15 to 15, mid = knob1 2.5k 250 to 5k knob2 -15 to 15, low 100hz -15 to 15)
+aux_track (2nd Aux get PRE button per knob on each track)
+mixer_track (input selector, PAD 26db, gain, COMP,  high_mid_low, 3 AUX knobs 2nd as described 0 to 10, FX 0 to 10, pan, mute toggle - labeled as ON or OFF, slider, vu_meter)
+multi_track (vertical or horizontal - is the wave form is to long to fit in the view it should scroll with the lay head in the middle until the end is visible then finish scrolling to the end like a main stream DAW.)
+sequencer_track
+wave_form_track
+sample_pdpatch_vst_browser (quickly preview sounds or vst program and puredata instruments load to track and drag and drop to track)

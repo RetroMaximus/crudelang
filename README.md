@@ -379,6 +379,8 @@ crudelang/
 ├── docs/               # language reference (hand-written) + generated API docs
 ├── build.py            # package crude with PyInstaller (Win/Linux/macOS)
 ├── crudelang.py        # compatibility shim for the historical scripts
+├── pytest.ini          # test runner config
+├── README.md           # this file
 └── requirements*.txt   # runtime / dev / optional dependencies
 ```
 
@@ -397,14 +399,16 @@ mis-documented binding fails CI rather than quietly drifting.
 
 ## Documentation
 
-| Guide | Topic |
-| --- | --- |
-| [`docs/scripting.md`](docs/scripting.md) | the language: statements, expressions, control flow |
-| [`docs/bindings.md`](docs/bindings.md) | every binding and its signature |
-| [`docs/widgets.md`](docs/widgets.md) | widget kinds, properties, events |
-| [`docs/manifest.md`](docs/manifest.md) | the project manifest, field by field |
-| [`docs/architecture.md`](docs/architecture.md) | how the phases and subsystems fit together |
-| [`docs/glyphs.md`](docs/glyphs.md) | the generated icon set |
+| Guide                                          | Topic                                               |
+|------------------------------------------------|-----------------------------------------------------|
+| [`docs/scripting.md`](docs/scripting.md)       | the language: statements, expressions, control flow |
+| [`docs/bindings.md`](docs/bindings.md)         | every binding and its signature                     |
+| [`docs/build.md`](docs/build.md)               | Optional runtime dependencies                       |
+| [`docs/crudelang.md`](docs/crudelang.md)       | module-level object                                 |
+| [`docs/widgets.md`](docs/widgets.md)           | widget kinds, properties, events                    |
+| [`docs/manifest.md`](docs/manifest.md)         | the project manifest, field by field                |
+| [`docs/architecture.md`](docs/architecture.md) | how the phases and subsystems fit together          |
+| [`docs/glyphs.md`](docs/glyphs.md)             | the generated icon set                              | 
 
 `docs/*.md` files named after a Python module (`crudelang`, `build`, `shell`,
 …) are generated API references; the language guides above are hand-written and

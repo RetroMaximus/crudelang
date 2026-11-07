@@ -1,11 +1,11 @@
 # Environments
 .venv/
-.venv.broken/
 __pycache__/
 *.py[cod]
 
 # Generated Pd patch cache (disposable, rebuilt on demand)
 .crude_build/
+.build_entry
 
 # Test / tooling output
 .pytest_cache/
@@ -28,8 +28,11 @@ libs/*.lib
 .jsondata/
 temp/
 logs/*.txt
+.qoder/
 
 # PyInstaller output from build.py (regenerated on demand)
 dist/
 build/
 .build_entry/
+
+help_gen.py

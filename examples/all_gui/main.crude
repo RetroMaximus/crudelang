@@ -774,7 +774,7 @@ VAR c_cap     = TEXT("every control below writes here, and into the log on the c
 # fresh local rather than moving the global it read - the only mutation this
 # language has is a list element written in place.
 VAR CLOCKS = [0, 0]
-VAR GLYPHS = ["record", "stop"]
+VAR GLYPHS = ["record", "stop", "play", "pause", "rewind", "fastforward"]
 
 FUNC counted(which)
     VAR now = AT(CLOCKS, which) + 1
