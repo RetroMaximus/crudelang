@@ -36,3 +36,5 @@ build/
 .build_entry/
 
 help_gen.py
+pull_latest.sh
+push_to_git.sh
