@@ -3,7 +3,7 @@
 
 set -e
 
-PROJECT_DIR="/c/pythonprojects/crudeprofiler"
+PROJECT_DIR="/path/to/crudelang"
 LIBPD_SRC="${PROJECT_DIR}/thrid-party/libpd"
 PD_SRC="${PROJECT_DIR}/thrid-party/pure-data"
 INSTALL_DIR="${PROJECT_DIR}/libs"
