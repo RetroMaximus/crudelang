@@ -23,7 +23,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Tuple
 
+
+
+
 import pytest
+pytestmark = pytest.mark.requires_gl
 
 from crude.cli import EXIT_OK, main
 from crude.commands.project import _open_display, _reporter, _splash, _wants_splash
@@ -133,6 +137,7 @@ def lines(capsys):
 
 # -- a window project, run --------------------------------------------------
 
+@pytest.mark.requires_gl
 def test_a_window_project_draws_its_progress_while_it_loads(deck, displays, capsys):
     assert main(["run", deck(), "--frames", "0"]) == EXIT_OK
 
