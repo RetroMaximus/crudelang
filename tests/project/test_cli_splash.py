@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Tuple
 
 
 import pytest
-pytestmark = pytest.mark.requires_libpd
+pytestmark = [pytest.mark.requires_gl, pytest.mark.requires_libpd]
 
 from crude.cli import EXIT_OK, main
 from crude.commands.project import _open_display, _reporter, _splash, _wants_splash
