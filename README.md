@@ -247,6 +247,9 @@ nothing, build from source — the vendored recipes live in `scripts/`:
 # Windows (from an MSYS2 / MinGW shell; builds against third-party/libpd)
 bash scripts/pd_dll_build.sh
 
+# *Note before building libpd it is suggested to build pure-data then move it to
+# the libpd source directory.
+
 # Linux / macOS
 bash scripts/libpd_build.sh
 ```
@@ -309,6 +312,7 @@ useful when a packaged build runs on a machine without your development setup:
 2. `libs/` next to the `crude` package (a normal checkout);
 3. the PyInstaller bundle — `sys._MEIPASS/libs/` (a `build.py` executable);
 4. `libs/` under the current working directory.
+
 
 On Windows the loader also registers the library's directory with
 `os.add_dll_directory` so the MinGW runtime siblings resolve; on
