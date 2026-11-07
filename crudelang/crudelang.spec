@@ -49,7 +49,7 @@ if os.path.isdir(LIBS_DIR):
 
 
 a = Analysis(
-    ["C:/pythonprojects/crudelang/crude/__main__.py"],
+    ["C:/path_to/crudelang/crude/__main__.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,
